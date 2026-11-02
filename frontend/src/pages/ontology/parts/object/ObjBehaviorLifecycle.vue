@@ -13,7 +13,7 @@ import { computed, reactive, ref, shallowRef, watch, nextTick, onScopeDispose } 
 import { useRoute, useRouter, RouterLink } from 'vue-router';
 import type { Cell, Graph } from '@antv/x6';
 import GraphCanvas from '@/components/GraphCanvas.vue';
-import { graphEdgeRoutes } from '@/components/graphEdges';
+import { fitGraphContent, graphEdgeRoutes } from '@/components/graphEdges';
 import ObjRef from '@/components/ObjRef.vue';
 import { canResolve } from '@/components/objectRegistry';
 import AppPagination from '@/components/AppPagination.vue';
@@ -21,7 +21,7 @@ import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
 import { useAppStore } from '@/stores/app';
 import { releaseByVer } from '@/api/releases';
-import { BRAND, GRAY, STATUS } from '@/theme';
+import { colors, GRAY, STATUS, chrome } from '@/theme';
 import { useDraftView } from '../useDraftView';
 import { useConfirmStore } from '@/stores/confirm';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
@@ -155,10 +155,10 @@ function draw(fit: boolean) {
       id: `s:${s.key}`, x: s.x, y: s.y, width: NW, height: NH, zIndex: 2,
       markup: [{ tagName: 'rect', selector: 'body' }, { tagName: 'rect', selector: 'inner' }, { tagName: 'text', selector: 'name' }, { tagName: 'text', selector: 'sub' }],
       attrs: {
-        body: { width: NW, height: NH, rx: 4, ry: 4, fill: on ? '#e8effb' : GRAY.g1, stroke: on ? BRAND : s.kind === '初始' ? GRAY.g9 : GRAY.g7,
+        body: { width: NW, height: NH, rx: 4, ry: 4, fill: on ? colors.brandBg : GRAY.g1, stroke: on ? colors.brand : s.kind === '初始' ? GRAY.g9 : GRAY.g7,
           strokeWidth: on || s.kind === '初始' ? 2 : 1, strokeDasharray: s.mark ? '4 3' : '', cursor: 'pointer' },
-        inner: end ? { x: 3, y: 3, width: NW - 6, height: NH - 6, rx: 3, ry: 3, fill: 'none', stroke: on ? BRAND : GRAY.g7, strokeWidth: 1, pointerEvents: 'none' } : { display: 'none' },
-        name: { text: s.name, refX: 0.5, refY: 22, textAnchor: 'middle', textVerticalAnchor: 'middle', fontSize: 14, fontWeight: 600, fill: on ? BRAND : GRAY.g10, pointerEvents: 'none' },
+        inner: end ? { x: 3, y: 3, width: NW - 6, height: NH - 6, rx: 3, ry: 3, fill: 'none', stroke: on ? colors.brand : GRAY.g7, strokeWidth: 1, pointerEvents: 'none' } : { display: 'none' },
+        name: { text: s.name, refX: 0.5, refY: 22, textAnchor: 'middle', textVerticalAnchor: 'middle', fontSize: 14, fontWeight: 600, fill: on ? colors.brand : GRAY.g10, pointerEvents: 'none' },
         sub: { text: s.mark ? `${s.mark} · ${s.kind}` : `${s.kind} · ${fmt(s.count)} 条`, refX: 0.5, refY: 41, textAnchor: 'middle', textVerticalAnchor: 'middle', fontSize: 12, fill: GRAY.g8, pointerEvents: 'none' },
       },
     }));
@@ -168,13 +168,13 @@ function draw(fit: boolean) {
     const on = sel.value === `t:${t.id}`;
     const by = short(t.by);
     return { id: `t:${t.id}`, from: t.from, to: t.to, text: `${t.trigger} ·${by.length > 9 ? '\n' : ' '}${by}${t.mark ? `（${t.mark}）` : ''}`,
-      color: on ? BRAND : GRAY.g8, dash: t.mark ? '5 4' : '', width: on ? 2 : 1.5 };
+      color: on ? colors.brand : GRAY.g8, dash: t.mark ? '5 4' : '', width: on ? 2 : 1.5 };
   });
   if (showIllegal.value) {
     for (const x of illegal.value) {
       if (!sm.has(x.from) || !sm.has(x.to)) continue;
       const on = sel.value === `x:${x.from}→${x.to}`;
-      edges.push({ id: `x:${x.from}→${x.to}`, from: x.from, to: x.to, text: `非法 · 近 7 天 ${x.count} 次`, color: on ? BRAND : STATUS.warning, dash: '4 4', width: on ? 2 : 1.5 });
+      edges.push({ id: `x:${x.from}→${x.to}`, from: x.from, to: x.to, text: `非法 · 近 7 天 ${x.count} 次`, color: on ? colors.brand : STATUS.warning, dash: '4 4', width: on ? 2 : 1.5 });
     }
   }
   const routes = graphEdgeRoutes(states.value.map((s) => ({ id: `s:${s.key}`, x: s.x, y: s.y, width: NW, height: NH })),
@@ -193,7 +193,7 @@ function draw(fit: boolean) {
     }));
   }
   g.resetCells(cells);
-  if (fit) nextTick(() => { g.zoomToFit({ padding: 48, maxScale: 1 }); g.centerContent(); });
+  if (fit) nextTick(() => requestAnimationFrame(() => { if (graph.value === g) fitGraphContent(g, 48); }));
 }
 function onReady(g: Graph) {
   graph.value = g;
@@ -203,6 +203,7 @@ function onReady(g: Graph) {
   draw(true);
 }
 watch(() => [props.objectId, histAt.value, isDraft.value, remote.key], () => draw(true));
+watch(chrome, () => draw(false));
 watch(sel, (v) => {
   if (!v.startsWith('t:')) return;
   const i = transitions.value.findIndex((t) => t.id === v.slice(2));

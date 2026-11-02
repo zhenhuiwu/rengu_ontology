@@ -499,7 +499,7 @@ async function rollback() {
     <a-empty v-else-if="!cur.id" description="暂无可显示的变更单" />
     <div v-else class="panel rl-detail">
       <div class="rl-head">
-        <span class="t-16 fw-600 c-1 rl-title">{{ cur.title }}</span>
+        <span class="t-16 fw-600 c-1 rl-title" :title="cur.title">{{ cur.title }}</span>
         <span class="t-14 c-3 num">{{ cur.id }}</span>
         <a-tag :color="tagColor(cur.status)">{{ statusLabel(cur.status) }}</a-tag>
         <a-tag>{{ cur.level }}</a-tag>
@@ -636,7 +636,7 @@ async function rollback() {
 .rl-reason { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
 .rl-tabs { padding: 0 16px; flex: none; }
 .rl-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
-.rl-body { padding: 16px; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
+.rl-body { padding: 16px; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
 .rl-old { text-decoration: line-through; }
 .rl-pager { margin-top: 0; }
 .rl-note { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--g2); border-radius: var(--radius); flex: none; }

@@ -33,7 +33,7 @@ interface ActionTypeDef {
   id: string; name: string; api: string; group: string; status: PubStatus; version: string;
   target: string; targetApi: string; targetKind?: 'store' | 'product' | 'order' | 'region';
   owner: string; desc: string; runners: string; approval: string;
-  sysId: string | null; endpoint: string; idemKey: string; httpMapping?: any;
+  sysId: string | null; endpoint: string; idemKey: string; httpMapping?: any; httpEndpointId?: string | null;
   usedBy: string[]; // 规则 ID
 }
 export interface ActionType extends ActionTypeDef {

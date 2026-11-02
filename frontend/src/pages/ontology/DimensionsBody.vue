@@ -27,9 +27,29 @@ import { loadDraftState } from './parts/useDraftView';
 import { useDraftView } from './parts/useDraftView';
 import { useStaticCr, draftFields, draftRows } from './parts/useStaticCr';
 import { useStaticPage } from './parts/useStaticPage';
-import { applyModelChange, fetchCurrentAfterWrite, fetchStaticDetail, matchDimension, type CRItemIn, type DimensionMatchResult, staticContextKey, isStaticReal } from '@/api/static';
+import { applyModelChange, deleteDimension, dimensionDeleteVersions, fetchCurrentAfterWrite, fetchStaticDetail, matchDimension, type CRItemIn, type DimensionMatchResult, staticContextKey, isStaticReal } from '@/api/static';
 
 const definitionOpen = ref(false), newDefinition = ref(false);
+const deleting = ref(false);
+async function deleteCurrent() {
+  if (readonly.value || deleting.value || !isStaticReal() || !cur.value?.id || newTarget.value) return;
+  const id = cur.value.id, name = cur.value.name, apiName = cur.value.api, kindName = cur.value.kind, key = staticContextKey();
+  deleting.value = true;
+  try {
+    const versions = await dimensionDeleteVersions(id);
+    if (key !== staticContextKey() || id !== cur.value?.id) return;
+    const ok = await confirm.ask({ title: `删除${kindName}`, target: `${name}（${apiName}）`, okText: '删除', danger: true,
+      impact: '删除立即生效，历史版本仍保留该定义。已被指标选为允许维度，或还有未完成的变更单时，不能删除。' });
+    if (!ok || key !== staticContextKey() || id !== cur.value?.id) return;
+    await deleteDimension(id, versions);
+    baseline.value = baseline.value.filter((d) => d.id !== id);
+    firstId.value = '';
+    await router.replace({ query: { ...route.query, dim: undefined, view: undefined } });
+    await dimensionPage.reload();
+    message.success(`${kindName}已删除`);
+  } catch (e) { message.error(e instanceof Error ? e.message : String(e)); }
+  finally { deleting.value = false; }
+}
 function openDefinition(isNew = false) { if (readonly.value || !isStaticReal()) return; newDefinition.value = isNew; definitionOpen.value = true; }
 const assistantDraft = ref<Record<string, unknown>>();
 watch(definitionOpen, open => { if (!open) assistantDraft.value = undefined; });
@@ -155,9 +175,10 @@ const valueSummary = computed(() => {
   return `共 ${all.length} 个取值${off ? `，停用 ${off} 个` : ''}${diff ? `，草稿改动 ${diff} 个` : ''}`;
 });
 const multiLevel = computed(() => valueLevels.value.length > 1);
+const needsValueCode = computed(() => !!cur.value?.object);
 const VPAGE = 10;
 const valueCols = computed(() => [
-  { title: '编码', dataIndex: 'code', width: 120 },
+  ...(needsValueCode.value ? [{ title: '编码', dataIndex: 'code', width: 120 }] : []),
   { title: '名称', key: 'name', width: 260 },
   ...(multiLevel.value ? [{ title: '层级', dataIndex: 'level', width: 88 }, { title: '上级', key: 'parent', width: 120 }] : []),
   { title: '同义词', key: 'synonyms', width: 220 },
@@ -195,9 +216,13 @@ async function applyDimension(section: string, rows: CRItemIn[], lockVersion: nu
 const vEdit = ref<DimValue | null>(null);
 const vForm = reactive<VForm>({ code: '', name: '', level: '', parent: '', synonyms: [], status: '启用', note: '' });
 const vErr = computed(() => {
-  if (!vForm.code.trim() || !vForm.name.trim()) return '编码和名称必填';
-  const dup = (cur.value?.values ?? []).find((v) => v !== vEdit.value && live(v, null) && inView(v.draft) && v.level === vForm.level && (v.code === vForm.code.trim() || v.name === vForm.name.trim()));
-  return dup ? `同一层级已有取值 ${dup.name}（${dup.code}），编码和名称需唯一（V5）` : '';
+  if (levels.value.length > 1 && !vForm.level) return '请选择层级';
+  const name = vForm.name.trim();
+  const code = vForm.code.trim() || (needsValueCode.value ? '' : name);
+  if (!name || (needsValueCode.value && !vForm.code.trim())) return needsValueCode.value ? '编码和名称必填' : '名称必填';
+  if (code.length > 64) return '名称最多 64 字';
+  const dup = (cur.value?.values ?? []).find((v) => v !== vEdit.value && live(v, null) && inView(v.draft) && v.level === vForm.level && (v.code === code || v.name === name));
+  return dup ? `已有取值 ${dup.name}${needsValueCode.value ? `（${dup.code}）` : ''}，名称需唯一` : '';
 });
 const parentLevel = computed(() => { const i = levels.value.findIndex((l) => l.name === vForm.level); return i > 0 ? levels.value[i - 1].name : ''; });
 const PARENT_OPTIONS = computed(() => (cur.value?.values ?? []).filter((v) => v.level === parentLevel.value && live(v, null)).map((v) => ({ value: v.name, label: v.name })));
@@ -217,7 +242,8 @@ async function openValue(v?: Row) {
 async function saveValue() {
   if (vErr.value || vSaving.value) return;
   if (valueContext.value !== JSON.stringify([staticContextKey(), cur.value?.id]) || (isStaticReal() && !directEdit.value)) { message.error('对象或身份已切换，请重新打开编辑'); return; }
-  const f = { code: vForm.code.trim(), name: vForm.name.trim(), level: vForm.level, parent: vForm.parent || undefined, synonyms: [...vForm.synonyms], status: vForm.status, note: vForm.note || undefined };
+  const name = vForm.name.trim();
+  const f = { code: vForm.code.trim() || name, name, level: vForm.level, parent: vForm.parent || undefined, synonyms: [...vForm.synonyms], status: vForm.status, note: vForm.note || undefined };
   const v = vEdit.value;
   // real：values 段，一个取值一行（key = 层级:编码；已发布取值 before = 发布时的值）
   const pub = v ? (v.diff ? v.pub : { name: v.name, parent: v.parent, synonyms: [...v.synonyms], status: v.status, note: v.note }) : undefined;
@@ -594,6 +620,7 @@ onBeforeUnmount(() => { ++definitionSeq; });
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => guard(() => { editing = false; setView(v); })" />
         <span class="dm-sp" />
+        <a-button v-if="isStaticReal() && !newTarget" size="small" danger :disabled="readonly || deleting" :loading="deleting" @click="deleteCurrent">删除</a-button>
       </div>
       <a-tabs v-model:activeKey="tab" class="dm-tabs">
         <a-tab-pane key="def" tab="定义" />
@@ -806,9 +833,9 @@ onBeforeUnmount(() => { ++definitionSeq; });
   <DefinitionEditor :assistant-draft="newDefinition ? assistantDraft : undefined" v-model:open="definitionOpen" kind="dimension" :target-id="newDefinition ? undefined : cur?.id" :cr-id="newDefinition || !isDraft ? undefined : draft?.id" :new-target="!!cr.head.value?.targets.find((t) => t.kind === 'dimension' && t.id === cur?.id)?.isNew" @saved="definitionSaved" />
   <a-modal v-model:open="vOpen" :title="vEdit ? `编辑取值 · ${vEdit.name}` : `新增取值 · ${cur?.name}`" :width="560" ok-text="保存" :confirm-loading="vSaving" :ok-button-props="{ disabled: !!vErr }" @ok="saveValue">
     <a-form layout="horizontal" :label-col="{ style: { width: '80px' } }" class="dm-form">
-      <a-form-item label="层级" required><a-select v-model:value="vForm.level" :options="LEVEL_OPTIONS" :disabled="!!vEdit" /></a-form-item>
+      <a-form-item v-if="levels.length > 1" label="层级" required><a-select v-model:value="vForm.level" :options="LEVEL_OPTIONS" :disabled="!!vEdit" /></a-form-item>
       <a-form-item v-if="parentLevel" label="上级"><a-select v-model:value="vForm.parent" :options="PARENT_OPTIONS" show-search allow-clear :placeholder="`选择${parentLevel}`" /></a-form-item>
-      <a-form-item label="编码" required><a-tooltip :title="vEdit ? '已发布取值的编码不可修改（V7）' : ''"><a-input v-model:value="vForm.code" :disabled="!!vEdit" placeholder="与源系统编码一致" /></a-tooltip></a-form-item>
+      <a-form-item v-if="needsValueCode" label="编码" required><a-tooltip :title="vEdit ? '已发布取值的编码不可修改（V7）' : ''"><a-input v-model:value="vForm.code" :disabled="!!vEdit" placeholder="与源列中的取值一致" /></a-tooltip></a-form-item>
       <a-form-item label="名称" required><a-input v-model:value="vForm.name" /></a-form-item>
       <a-form-item label="同义词"><a-select v-model:value="vForm.synonyms" mode="tags" :open="false" placeholder="输入后回车" /></a-form-item>
       <a-form-item label="状态"><a-radio-group v-model:value="vForm.status"><a-radio value="启用">启用</a-radio><a-radio value="停用">停用</a-radio></a-radio-group></a-form-item>
@@ -853,7 +880,7 @@ onBeforeUnmount(() => { ++definitionSeq; });
 .dm-sp { flex: 1; }
 .dm-tabs { padding: 0 16px; flex: none; }
 .dm-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
-.dm-body { flex: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.dm-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
 .dm-def { flex-direction: row; gap: 16px; }
 .dm-def-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .dm-def-right { width: 440px; flex: none; display: flex; flex-direction: column; gap: 8px; padding-left: 16px; border-left: var(--border); }

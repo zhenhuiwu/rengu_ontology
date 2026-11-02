@@ -5,6 +5,7 @@
 :root {
   --brand: #1f5fd1;
   --brand-bg: #e8effb;
+  --mark: #212D4B;
 
   --g1: #ffffff; --g2: #fafafa; --g3: #f5f5f5; --g4: #f0f0f0; --g5: #e5e6e8;
   --g6: #d9d9d9; --g7: #bfbfbf; --g8: #8c8c8c; --g9: #595959; --g10: #262626;
@@ -28,6 +29,17 @@
   --topbar-h: 48px;
   --sider-w: 216px;
   --gap: 12px;
+}
+
+/* 海军蓝：整页同一底色。边框和抬起一层仍然用灰阶变量，组件不用改选择器。 */
+html[data-chrome="navy"] {
+  color-scheme: dark;
+  --brand: #3B82F6;
+  --brand-bg: #243A66;
+  --mark: #ffffff;
+  --g1: #212D4B; --g2: #1A2542; --g3: #212D4B; --g4: #2C3B5C; --g5: #3A4C70;
+  --g6: #4A5E86; --g7: #8EA0C0; --g8: #B7C4DA; --g9: #D5DEEE; --g10: #F4F7FC;
+  --warning-bg: #3A311C;
 }
 
 /* 字号工具类 */
@@ -59,7 +71,7 @@ body { background: var(--g3); color: var(--g10); font-size: var(--fs-14); }
 .panel-body { flex: 1; min-height: 0; padding: 12px 16px; }
 
 /* 页面里唯一允许的滚动区，必须显式加这个类 */
-.scroll-area { overflow: auto; min-height: 0; }
+.scroll-area { overflow: auto; min-height: 0; min-width: 0; }
 
 /* antd 菜单分组标题按辅助字号 */
 .ant-menu-item-group-title { font-size: var(--fs-12) !important; padding: 8px 16px 4px 24px !important; }
@@ -73,5 +85,29 @@ body { background: var(--g3); color: var(--g10); font-size: var(--fs-14); }
 .tl-current { color: var(--tl-current); }
 
 /* 分页表格容器固定加 .paged-scroll：放得下时不滚动；条数多于一屏或顶部出现横幅时，它是页面唯一滚动区，表头吸顶 */
-.paged-scroll { flex: 1; min-height: 0; overflow: auto; }
+.paged-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
 .paged-scroll .ant-table-thead > tr > th { position: sticky; top: 0; z-index: 2; }
+
+/* 数据表锁在容器里。列上的像素宽度只作相对权重，随容器一起缩放，避免换屏幕后某列被挤没或整表撑出窗口 */
+.ant-table-wrapper { max-width: 100%; min-width: 0; }
+.ant-table-content > table,
+.ant-table-header > table,
+.ant-table-body > table,
+.ant-table-summary > table {
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed !important;
+}
+.ant-table-cell { overflow: hidden; }
+
+html[data-chrome="navy"] .ant-menu,
+html[data-chrome="navy"] .ant-menu-sub,
+html[data-chrome="navy"] .ant-menu-inline {
+  background: var(--g1);
+  color: var(--g9);
+}
+html[data-chrome="navy"] .ant-menu-item-selected,
+html[data-chrome="navy"] .ant-menu-item-selected:hover {
+  background: var(--brand-bg) !important;
+  color: var(--g10) !important;
+}

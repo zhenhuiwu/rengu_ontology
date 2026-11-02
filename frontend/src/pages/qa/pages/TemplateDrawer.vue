@@ -20,7 +20,7 @@ const calibers = computed(() => [...new Set((props.tpl?.cards ?? []).map((c) => 
 <template>
   <a-drawer :open="!!tpl" :width="760" @close="emit('close')">
     <template #title>
-      <span v-if="tpl" class="td-title">模板预览 · {{ tpl.name }} <InfoTip :title="`${tpl.desc}。模板只含卡片结构和口径，不含数据；新建后按当前身份的数据权限取数。`" /></span>
+      <span v-if="tpl" class="td-title"><span class="td-title-text" :title="tpl.name">模板预览 · {{ tpl.name }}</span><InfoTip :title="`${tpl.desc}。模板只含卡片结构和口径，不含数据；新建后按当前身份的数据权限取数。`" /></span>
     </template>
     <template #extra>
       <UseTemplatePop v-if="tpl" :tpl="tpl" size="middle" primary :disabled="readonly" :reason="reason" @create="(e) => emit('create', e)" @created="(id) => emit('created', id)" />
@@ -41,8 +41,10 @@ const calibers = computed(() => [...new Set((props.tpl?.cards ?? []).map((c) => 
 
 <style scoped>
 .td { display: flex; flex-direction: column; gap: 10px; }
-.td-meta { display: flex; gap: 24px; }
-.td-title { display: inline-flex; align-items: center; gap: 8px; }
+.td-meta { display: flex; flex-wrap: wrap; gap: 8px 24px; overflow-wrap: anywhere; }
+.td-meta > span { min-width: 0; }
+.td-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.td-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .td-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.td-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.td-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 </style>

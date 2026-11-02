@@ -377,6 +377,24 @@ export function invalidateStaticAfterWrite(ver: string) {
     app.ontologyNextVersion = current.next;
   }).catch(() => undefined);
 }
+export async function deleteObjectType(id: string, versions: { lockVersion: number; objectVersion: number }) {
+  const key = staticContextKey();
+  const result = await api.post<{ ver: string }>(`/object-types/${encodeURIComponent(id)}:delete`, versions);
+  if (key !== staticContextKey()) throw new Error('身份或版本已切换，请重新加载');
+  generation++; cache.clear();
+  useAppStore().ontologyVersion = result.ver;
+  return result;
+}
+export const objectDeleteVersions = (id: string) => api.get<{ lockVersion: number; objectVersion: number }>(`/object-types/${encodeURIComponent(id)}:delete-check`);
+export async function deleteDimension(id: string, versions: { lockVersion: number; dimensionVersion: number }) {
+  const key = staticContextKey();
+  const result = await api.post<{ ver: string }>(`/dimensions/${encodeURIComponent(id)}:delete`, versions);
+  if (key !== staticContextKey()) throw new Error('身份或版本已切换，请重新加载');
+  generation++; cache.clear();
+  useAppStore().ontologyVersion = result.ver;
+  return result;
+}
+export const dimensionDeleteVersions = (id: string) => api.get<{ lockVersion: number; dimensionVersion: number }>(`/dimensions/${encodeURIComponent(id)}:delete-check`);
 export async function applyModelChange(target: { kind: TargetKind; id?: string; isNew?: boolean; name?: string }, sections: { section: string; rows: CRItemIn[] }[], lockVersion: number) {
   const key = staticContextKey();
   const result = await api.post<{ targetId: string; ver: string }>('/model-changes:apply', { target, sections, lockVersion });

@@ -7,7 +7,7 @@ function set(key: string | number, value: any) { const next = Array.isArray(prop
 <template>
   <div v-if="node.type === '对象'">
     <div v-for="field in node.schema?.fields" :key="field.api" style="margin: 8px 0 8px 16px">
-      <div>{{ field.name }} <span v-if="field.required" style="color: #c33">（必填）</span></div>
+      <div>{{ field.name }} <span v-if="field.required" class="c-error">（必填）</span></div>
       <PayloadValueEditor :node="field" :model-value="modelValue?.[field.api]" @update:model-value="set(field.api, $event)" />
     </div>
   </div>

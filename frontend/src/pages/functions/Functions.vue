@@ -290,8 +290,9 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
 .fn-badge { margin-left: auto; flex: none; }
 .fn-pager { padding: 6px 16px 8px; }
 .fn-detail { flex: 1; min-width: 0; }
-.fn-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px 4px; }
-.fn-title { display: flex; align-items: center; gap: 10px; }
+.fn-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 14px 20px 4px; }
+.fn-title { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
+.fn-title > span { max-width: 100%; overflow-wrap: anywhere; }
 .fn-sub { padding: 0 20px; }
 .fn-tabs { padding: 0 20px; flex: none; }
 .fn-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }

@@ -4,6 +4,7 @@ import { PAGES, type NavArea } from '@/nav';
 import { ADMIN_USERS, AUDIT_LOGS, type AdminUser } from '@/mock/admin';
 import { effectiveAccess, type EffectiveAccess, type EffectiveObj, type FuncLevel } from '@/mock/roles';
 import { useAppStore } from './app';
+import { anyReal } from '@/api/config';
 
 /**
  * “以此用户预览”（角色与权限 → 成员 → 以此用户预览 → 进入预览）。
@@ -25,6 +26,7 @@ export interface PreviewSession {
 
 const KEY = 'ui-vue:preview';
 const load = (): PreviewSession | null => {
+  if (anyReal()) { try { sessionStorage.removeItem(KEY); } catch { /* private mode */ } return null; }
   try { const session = JSON.parse(sessionStorage.getItem(KEY) || 'null') as PreviewSession | null; return session?.ontologyId === useAppStore().ontologyId ? session : null; } catch { return null; }
 };
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -49,6 +51,7 @@ export const usePreviewStore = defineStore('preview', {
   actions: {
     /** 进入预览；access 传入时用它（角色页正在编辑的角色），否则按 mock 里的角色计算 */
     start(u: AdminUser, returnTo: string, access?: EffectiveAccess) {
+      if (anyReal()) return;
       const a = access ?? effectiveAccess(u);
       this.session = {
         ontologyId: useAppStore().ontologyId,

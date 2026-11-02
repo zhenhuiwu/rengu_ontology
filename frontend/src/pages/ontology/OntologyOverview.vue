@@ -11,14 +11,15 @@ import { Empty, message } from 'ant-design-vue';
 import { RightOutlined } from '@ant-design/icons-vue';
 import type { Graph } from '@antv/x6';
 import GraphCanvas from '@/components/GraphCanvas.vue';
-import { graphEdgeRoutes } from '@/components/graphEdges';
+import { fitGraphContent, relationshipRoutes } from '@/components/graphEdges';
+import { layoutGraph, relationshipColor } from '@/components/graphLayout';
 import AppPagination from '@/components/AppPagination.vue';
 import InfoTip from '@/components/InfoTip.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import BuildGuideDrawer from './parts/BuildGuideDrawer.vue';
 import { createCR, staticContextKey, isStaticReal } from '@/api/static';
 import { useReadonly } from '@/composables/useReadonly';
-import { GRAY, STATUS } from '@/theme';
+import { GRAY, STATUS, chrome } from '@/theme';
 import { draftOf, useDraftView } from './parts/useDraftView';
 import { useAppStore } from '@/stores/app';
 import { RELEASES } from '@/api/releases';
@@ -103,17 +104,16 @@ watch([contextKey, live, filterKind, page, size], loadTodos, { immediate: true }
 const stCls = (t: Tone) => (t === 'failed' ? 'tl-failed' : t === 'attention' ? 'tl-attention' : 'c-3');
 
 /* ── 对象关系缩略图（只读；点对象进入对象类型） ── */
-const POS: Record<string, [number, number]> = {
-  promotion: [0.25, 0.1], product: [0.5, 0.12], category: [0.72, 0.04], supplier: [0.92, 0.2],
-  refund_line: [0.05, 0.33], order_line: [0.27, 0.33], inventory: [0.73, 0.34],
-  refund: [0.25, 0.52], order: [0.5, 0.5], warehouse: [0.94, 0.55], shipment: [0.72, 0.64],
-  member_level: [0.05, 0.6], member: [0.25, 0.72], stored_card: [0.05, 0.86],
-  store: [0.5, 0.8], employee: [0.86, 0.84], province: [0.3, 0.96], region: [0.7, 0.96],
-};
-const VW = 960; const VH = 540; const NW = 96; const NH = 32;
-// 节点 / 边：演示模式读 mockGraph()；真接口（开关 static）读 GET /ontology/graph（src/api/overview.ts），
-// 图谱独立加载，不等待统计与发布列表；坐标 POS 仍由前端定义。
+// 演示和真接口共用关系探索视图；节点位置由有限力导向布局生成。
 const graphData = ref<OverviewGraph>(isOverviewReal() ? { nodes: [], edges: [] } : mockGraph());
+const selection = ref<{ kind: 'node' | 'edge'; id: string } | null>(null);
+const graphGroups = computed(() => [...new Set(graphData.value.nodes.map((node) => node.group).filter(Boolean))].sort());
+const selectedName = computed(() => selection.value?.kind === 'node'
+  ? graphData.value.nodes.find((node) => node.id === selection.value?.id)?.name
+  : graphData.value.edges.find((edge) => edge.id === selection.value?.id)?.name);
+const selectedDefinition = computed(() => !selection.value ? null : selection.value.kind === 'node'
+  ? { path: '/build/ontology/object-types', query: { type: selection.value.id } }
+  : { path: '/build/ontology/link-types', query: { link: selection.value.id } });
 const graphLoaded = ref(false);
 const nodeCount = computed(() => graphData.value.nodes.length);
 const edgeCount = computed(() => {
@@ -127,6 +127,7 @@ async function loadGraph() {
   const key = contextKey();
   summary.value = null; recent.value = []; loadError.value = ''; graphLoaded.value = false;
   graphData.value = live.value ? { nodes: [], edges: [] } : mockGraph();
+  selection.value = null;
   if (graphRef) graphRef.clearCells();
   if (!live.value) { if (graphRef) addCells(graphRef); return; }
   const valid = () => my === overviewSeq && key === contextKey();
@@ -144,42 +145,69 @@ async function loadGraph() {
   ]);
 }
 watch([contextKey, live], loadGraph, { immediate: true });
+watch(chrome, () => { if (!graphRef) return; graphRef.clearCells(); addCells(graphRef); });
 onBeforeUnmount(() => { ++overviewSeq; graphRef = null; });
 function draw(g: Graph) {
   graphRef = g;
-  (g.options as unknown as { interacting: boolean }).interacting = false;
+  g.options.interacting = { nodeMovable: true, edgeMovable: false, edgeLabelMovable: false, magnetConnectable: false };
   addCells(g);
-  g.on('node:click', ({ node }) => router.push({ path: '/build/ontology/object-types', query: { type: node.id as string } }));
-  g.on('edge:click', ({ edge }) => router.push({ path: '/build/ontology/link-types', query: { link: String(edge.id) } }));
-  g.on('resize', () => { g.zoomToFit({ padding: 16, maxScale: 1.4 }); g.centerContent(); });
+  g.on('node:click', ({ node }) => { selection.value = { kind: 'node', id: String(node.id) }; focusGraph(); });
+  g.on('edge:click', ({ edge }) => { selection.value = { kind: 'edge', id: String(edge.id) }; focusGraph(); });
+  g.on('blank:click', clearGraphSelection);
+  g.on('node:mouseenter', ({ node }) => { if (!selection.value) focusGraph(String(node.id)); });
+  g.on('node:mouseleave', () => focusGraph());
+  g.on('node:change:position', () => {
+    const routes = relationshipRoutes(g.getNodes().map((node) => ({ id: String(node.id), ...node.getBBox() })), graphData.value.edges);
+    g.batchUpdate('relationship-drag', () => {
+      for (const edge of g.getEdges()) {
+        const vertices = routes.get(String(edge.id))?.vertices ?? [];
+        if (JSON.stringify(vertices) !== JSON.stringify(edge.getVertices())) edge.setVertices(vertices);
+      }
+    });
+  });
+  g.on('resize', () => fitGraphContent(g, 32, 1.4));
+}
+function clearGraphSelection() { selection.value = null; focusGraph(); }
+function focusGraph(hoverId?: string) {
+  const g = graphRef;
+  if (!g) return;
+  const selected = selection.value;
+  const id = hoverId ?? (selected?.kind === 'node' ? selected.id : '');
+  const relatedEdges = graphData.value.edges.filter((edge) => id ? edge.from === id || edge.to === id : edge.id === selected?.id);
+  const relatedIds = new Set([id, ...relatedEdges.flatMap((edge) => [edge.from, edge.to])]);
+  const focused = !!id || !!selected;
+  g.batchUpdate('relationship-focus', () => {
+    for (const node of g.getNodes()) {
+      const active = !focused || relatedIds.has(String(node.id));
+      node.attr('body/opacity', active ? 1 : 0.2); node.attr('label/opacity', active ? 1 : 0.25);
+      node.attr('body/strokeWidth', String(node.id) === id ? 3 : 1.5);
+    }
+    for (const edge of g.getEdges()) {
+      const active = !focused || relatedEdges.some((relation) => relation.id === edge.id);
+      edge.attr('line/opacity', active ? 1 : 0.12);
+      edge.attr('line/strokeWidth', focused && active ? 1.8 : 1);
+      edge.attr('line/stroke', focused && active ? GRAY.g10 : GRAY.g7);
+      edge.attr('label/opacity', active ? 1 : 0.18); edge.attr('body/opacity', active ? 1 : 0.18);
+    }
+  });
 }
 /** 画节点和边（首次 @ready 时画；真接口数据到了 / 切换版本后清空重画），画完适配视图 */
 function addCells(g: Graph) {
   const { nodes, edges } = graphData.value;
-  const positions = new Map<string, { x: number; y: number }>();
-  let extra = 0;
-  for (const node of nodes) {
-    let position = POS[node.id];
-    if (!position) {
-      position = [1.12 + Math.floor(extra / 5) * 0.2, 0.1 + (extra % 5) * 0.18];
-      extra++;
-    }
-    const [x, y] = position;
-    positions.set(node.id, { x: x * VW, y: y * VH });
-  }
+  const positions = layoutGraph(nodes, edges);
   g.batchUpdate('overview', () => {
     nodes.forEach((o) => {
       const p = positions.get(o.id)!;
       const failed = !live.value && failedByType.has(o.id);
       g.addNode({
-        id: o.id, shape: 'rect', x: p.x - NW / 2, y: p.y - NH / 2, width: NW, height: NH, label: o.name,
+        id: o.id, shape: 'circle', x: p.x, y: p.y, width: p.width, height: p.height, zIndex: 1, label: o.name,
         attrs: {
-          body: { fill: GRAY.g1, stroke: failed ? STATUS.error : o.draft ? GRAY.g7 : GRAY.g6, strokeWidth: 1, strokeDasharray: o.draft ? '4 3' : '', rx: 4, ry: 4, cursor: 'pointer' },
-          label: { fill: o.draft ? GRAY.g8 : GRAY.g10, fontSize: 12, cursor: 'pointer' },
+          body: { fill: relationshipColor(o.group || o.api || o.id, chrome.value === 'navy', graphGroups.value), stroke: failed ? STATUS.error : GRAY.g7, strokeWidth: 1.5, strokeDasharray: o.draft ? '4 3' : '', cursor: 'grab' },
+          label: { fill: GRAY.g10, fontSize: 14, fontWeight: 600, title: o.name, textWrap: { width: 58, height: 54, ellipsis: true, breakWord: true }, cursor: 'grab' },
         },
       });
     });
-    const routes = graphEdgeRoutes(nodes.map((n) => ({ id: n.id, x: positions.get(n.id)!.x - NW / 2, y: positions.get(n.id)!.y - NH / 2, width: NW, height: NH })),
+    const routes = relationshipRoutes(nodes.map((n) => ({ id: n.id, ...positions.get(n.id)! })),
       edges.map((e) => ({ ...e, text: e.name || e.id })));
     edges.forEach((l) => {
       const route = routes.get(l.id);
@@ -187,15 +215,16 @@ function addCells(g: Graph) {
       const label = l.name || l.id;
       g.addEdge({
         id: l.id,
-        ...route, zIndex: 0,
-        attrs: { line: { stroke: GRAY.g7, strokeWidth: 1, strokeDasharray: l.status === '已发布' ? '' : '4 3', targetMarker: { name: 'block', width: 7, height: 5 }, cursor: 'pointer' } },
-        labels: [{ position: route.labelPosition, attrs: { label: { text: label, fontSize: 12, fill: GRAY.g9, cursor: 'pointer' }, body: { fill: GRAY.g2, stroke: 'none', rx: 2, ry: 2, cursor: 'pointer' } } }],
+        ...route, zIndex: 0, relationship: true,
+        attrs: { line: { title: label, stroke: GRAY.g7, strokeWidth: 1, strokeDasharray: l.status === '已发布' ? '' : '4 3', targetMarker: { name: 'classic', width: 7, height: 6 }, cursor: 'pointer' }, wrap: { strokeWidth: 14, cursor: 'pointer' } },
+        labels: [{ position: route.labelPosition, attrs: { label: { text: label, title: label, fontSize: 14, fill: GRAY.g9, cursor: 'pointer' }, body: { fill: GRAY.g2, stroke: GRAY.g2, strokeWidth: 6, rx: 2, ry: 2, cursor: 'pointer' } } }],
       });
     });
   });
+  focusGraph();
   if (g.getNodes().length) requestAnimationFrame(() => {
     if (graphRef !== g) return;
-    g.zoomToFit({ padding: 16, maxScale: 1.4 }); g.centerContent();
+    fitGraphContent(g, 32, 1.4);
   });
 }
 
@@ -268,9 +297,21 @@ async function start(opts: { join?: string; title?: string; desc?: string }) {
             <span><i class="lg lg-dash" />草稿</span>
             <span v-if="!live"><i class="lg lg-fail" />数据质量失败</span>
           </span>
-          <InfoTip :text="live ? '点击对象或关系查看定义' : '点击对象查看对象类型；虚线为草稿，红框为数据质量检查失败'" />
+          <InfoTip text="拖动对象调整位置；点击对象聚焦关联，点击空白恢复全部。选中后可查看定义；虚线为草稿。" />
         </div>
-        <div class="oo-canvas"><GraphCanvas @ready="draw" /><div v-if="live && graphLoaded && !nodeCount" class="oo-empty"><a-empty :image="Empty.PRESENTED_IMAGE_SIMPLE" description="尚未定义对象类型" /></div></div>
+        <div class="oo-canvas"><GraphCanvas relationship @ready="draw" /><div v-if="live && graphLoaded && !nodeCount" class="oo-empty"><a-empty :image="Empty.PRESENTED_IMAGE_SIMPLE" description="尚未定义对象类型" /></div></div>
+        <div class="oo-graph-footer">
+          <template v-if="selection">
+            <span class="t-14 fw-600 c-1 oo-ell">{{ selectedName || selection.id }}</span>
+            <span class="t-12 c-3">{{ selection.kind === 'node' ? '关联对象' : '关系' }}</span>
+            <span class="oo-grow" />
+            <a-button size="small" @click="clearGraphSelection">全部</a-button>
+            <a-button v-if="selectedDefinition" size="small" type="primary" @click="router.push(selectedDefinition)">查看定义</a-button>
+          </template>
+          <template v-else>
+            <span v-for="group in graphGroups" :key="group" class="oo-group t-12 c-2"><i :style="{ background: relationshipColor(group, chrome === 'navy', graphGroups) }" />{{ group }}</span>
+          </template>
+        </div>
       </div>
 
       <div class="oo-side">
@@ -316,45 +357,50 @@ async function start(opts: { join?: string; title?: string; desc?: string }) {
 </template>
 
 <style scoped>
-.oo { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--gap); }
+.oo { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: var(--gap); }
 .oo-cards { flex: none; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--gap); }
-.oo-card { padding: 12px 16px; gap: 2px; cursor: pointer; }
+.oo-card { padding: 12px 16px; gap: 2px; cursor: pointer; min-width: 0; }
 .oo-card:hover { border-color: var(--g7); }
-.oo-card-top { display: flex; align-items: center; justify-content: space-between; }
-.oo-count { display: flex; align-items: baseline; gap: 0; white-space: nowrap; overflow: hidden; }
-.oo-alert { margin-left: 12px; }
-.oo-grow { flex: 1; }
-.oo-main { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.oo-graph { flex: 1; min-width: 0; }
+.oo-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.oo-card-top > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oo-count { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 8px; min-width: 0; }
+.oo-alert { margin-left: 4px; }
+.oo-grow { flex: 1; min-width: 8px; }
+.oo-main { flex: 1; min-height: 0; min-width: 0; display: flex; gap: var(--gap); }
+.oo-graph { flex: 1.4 1 0; min-width: 0; overflow: hidden; }
+.oo-graph .panel-head { height: auto; min-height: 44px; min-width: 0; flex-wrap: wrap; gap: 4px 12px; overflow: hidden; }
 .oo-hist { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
 .oo-canvas { flex: 1; min-height: 0; position: relative; }
+.oo-graph-footer { flex: none; min-height: 48px; padding: 8px 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; border-top: var(--border); }
+.oo-group { display: inline-flex; gap: 6px; align-items: center; }
+.oo-group > i { width: 10px; height: 10px; border: 1px solid var(--g7); border-radius: 50%; }
 .oo-empty { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
-.oo-legend { margin-left: 16px; display: flex; gap: 16px; align-items: center; }
-.oo-legend > span { display: inline-flex; align-items: center; gap: 6px; }
-.lg { display: inline-block; width: 16px; height: 10px; border-radius: 2px; background: var(--g1); }
+.oo-legend { margin-left: 0; min-width: 0; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.oo-legend > span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.lg { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--g1); }
 .lg-solid { border: 1px solid var(--g6); }
 .lg-dash { border: 1px dashed var(--g7); }
 .lg-fail { border: 1px solid var(--error); }
-.oo-side { width: 560px; flex: none; display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
+.oo-side { flex: 1 1 0; width: auto; max-width: 560px; min-width: 0; display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
+.oo-todo, .oo-rel { min-width: 0; overflow: hidden; }
+.oo-side .panel-head { min-width: 0; gap: 8px; height: auto; min-height: 44px; }
 .oo-todo { flex: 1 1 0; }
 .oo-list { flex: 1; min-height: 0; overflow: hidden; }
-.oo-row { height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--g4); cursor: pointer; }
+.oo-row, .oo-rrow { display: grid; align-items: center; column-gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--g4); cursor: pointer; min-width: 0; }
+.oo-row { height: 44px; grid-template-columns: 3.2em minmax(0, 1.6fr) minmax(0, 0.9fr) 5.4em minmax(4.2em, 6.4em); }
 .oo-row:hover, .oo-rrow:hover { background: var(--g2); }
-.oo-kind { width: 48px; flex: none; }
-.oo-row-main { flex: 1; }
-.oo-who { width: 88px; flex: none; }
-.oo-by { width: 64px; flex: none; }
-.oo-time { width: 84px; flex: none; white-space: nowrap; }
+.oo-kind, .oo-who, .oo-by, .oo-time, .oo-ver, .oo-st, .oo-row-main, .oo-note { width: auto; min-width: 0; }
 .oo-ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.oo-st { flex: none; display: inline-flex; align-items: center; gap: 6px; width: 104px; white-space: nowrap; }
+.oo-st { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .oo-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
 .c-3 > .oo-dot { background: var(--g7); }
 .oo-pager { padding: 8px 16px; border-top: var(--border); flex: none; }
 .oo-rel { flex: 1 1 0; }
-.oo-release-list { flex: 1; min-height: 0; overflow-y: auto; }
+.oo-release-list { flex: 1; min-height: 0; overflow: auto; }
 .oo-more:hover { color: var(--g10); }
-.oo-rrow { height: 40px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--g4); cursor: pointer; }
+.oo-rrow { height: 40px; grid-template-columns: minmax(4.6em, 7.2em) minmax(0, 1fr) minmax(0, 4.2em) 5.4em; }
 .oo-rrow:last-child { border-bottom: none; }
-.oo-ver { width: 96px; flex: none; }
-.oo-note { flex: 1; }
+@media (max-width: 1400px) {
+  .oo-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 </style>

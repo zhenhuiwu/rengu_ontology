@@ -6,7 +6,7 @@
  * - real 模式：启动时 loadReleases() 用接口结果整体替换（新→旧，第一条是当前版本），并更新 app store 的当前版本；
  *   接口返回空列表或 current 为 null（例如默认 seed 跳过了 versioning）时显示空列表，由调用方提示。
  */
-import { shallowReactive } from 'vue';
+import { shallowReactive, shallowRef } from 'vue';
 import { RELEASES as MOCK_RELEASES, type Release } from '@/mock/releases';
 import { apiClient, currentApiContext } from './http';
 
@@ -27,6 +27,9 @@ export const toRelease = (r: ReleaseDto): Release => ({ ver: r.ver, publishedAt:
 
 export const RELEASES: Release[] = shallowReactive(api.isReal() ? [] : [...MOCK_RELEASES]);
 export const releaseByVer = (v: string) => RELEASES.find((r) => r.ver === v);
+const emptyReleaseContext = shallowRef<string | null>(null);
+let releaseLoadId = 0;
+export const hasConfirmedEmptyRelease = () => emptyReleaseContext.value === JSON.stringify(currentApiContext());
 
 export const fetchReleases = () => api.get<ReleaseListDto>('/releases');
 export const fetchCurrentRelease = () => api.get<CurrentVersionDto>('/releases/current');
@@ -38,11 +41,14 @@ export type LoadReleasesResult =
 
 /** real 模式下拉取发布记录。mock 模式什么都不做；接口为空或失败时清空列表。失败抛 ApiError。 */
 export async function loadReleases(): Promise<LoadReleasesResult> {
+  const id = ++releaseLoadId;
+  emptyReleaseContext.value = null;
   if (!api.isReal()) return { kind: 'mock' };
   const key = JSON.stringify(currentApiContext());
   RELEASES.splice(0);
   const [list, cur] = await Promise.all([fetchReleases(), fetchCurrentRelease()]);
-  if (key !== JSON.stringify(currentApiContext())) return { kind: 'empty' };
+  if (id !== releaseLoadId || key !== JSON.stringify(currentApiContext())) return { kind: 'empty' };
+  if (cur.current === null && list.current === null && !list.items.length) emptyReleaseContext.value = key;
   RELEASES.splice(0, RELEASES.length, ...list.items.map(toRelease));
   if (!cur.current) return { kind: 'empty', next: cur.next };
   return { kind: 'ok', current: cur.current, publishedAt: cur.formalRelease?.publishedAt ?? '—', next: cur.next };

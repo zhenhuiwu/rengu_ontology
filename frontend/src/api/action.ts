@@ -57,8 +57,8 @@ const opt = (v?: string) => (v && v !== '全部' ? v : undefined);
 
 export const listActionTypes = async (q: { group?: string; kw?: string; page: number; size: number }) =>
   clean(await api.get<PageResult<ActionTypeRow> & { groups: string[] }>('/action-types', { query: { group: opt(q.group), kw: q.kw?.trim() || undefined, page: q.page, size: q.size } }));
-export const listEventTypes = async (q: { source?: string; kw?: string; page: number; size: number }) =>
-  clean(await api.get<PageResult<EventTypeRow> & { sources: string[] }>('/event-types', { query: { source: opt(q.source), kw: q.kw?.trim() || undefined, page: q.page, size: q.size } }));
+export const listEventTypes = async (q: { source?: string; kw?: string; page: number; size: number }, signal?: AbortSignal) =>
+  clean(await api.get<PageResult<EventTypeRow> & { sources: string[] }>('/event-types', { query: { source: opt(q.source), kw: q.kw?.trim() || undefined, page: q.page, size: q.size }, signal }));
 
 // ---------------- 快照（详情 + 页签） ----------------
 
@@ -257,7 +257,7 @@ export const getActionRunStats = (typeId: string) => api.get<ActionRunStats>(`/a
 export async function listActionRuns(typeId: string, q: { page: number; size: number; status?: string }) {
   if (!dynamicApi.isReal()) throw new Error('执行记录需要启用真实动态接口');
   const ctx = { ...currentApiContext() };
-  const result = await dynamicApi.get<PageResult<Record<string, unknown>>>('/action-runs', fixed(ctx, { actionType: typeId, scope: 'runs', page: q.page, size: q.size, status: opt(q.status) }));
+  const result = await dynamicApi.get<PageResult<Record<string, unknown>>>('/action-runs', fixed(ctx, { actionType: typeId, scope: 'all', page: q.page, size: q.size, status: opt(q.status) }));
   return { ...result, items: result.items.map(pickRun) };
 }
 
@@ -270,8 +270,8 @@ export type EventRecord = Omit<MockEventRecord, 'outcome' | 'latencyMs'> & {
 };
 export interface EventQuery { range: '24h' | '7d'; outcome?: string; page: number; size: number }
 /** 近期事件一页（range=7d 后台不设时间下限，同 mock「近 7 天」= 全部样本） */
-export const listEvents = async (typeId: string, q: EventQuery) =>
-  clean(await api.get<PageResult<EventRecord>>(`/event-types/${enc(typeId)}/events`, { query: { range: q.range, outcome: opt(q.outcome), page: q.page, size: q.size } }));
+export const listEvents = async (typeId: string, q: EventQuery, signal?: AbortSignal) =>
+  clean(await api.get<PageResult<EventRecord>>(`/event-types/${enc(typeId)}/events`, { query: { range: q.range, outcome: opt(q.outcome), page: q.page, size: q.size }, signal }));
 export const getEvent = async (id: string) => clean(await api.get<EventRecord>(`/events/${enc(id)}`));
 
 export interface EventSimulation {
@@ -284,8 +284,15 @@ export interface EventDeliveryStatus {
   eventId: string; outcome: string; summary: string; total: number; page: number; size: number;
   items: EventDelivery[];
 }
+/** 接口已脱敏的失败位置；不包含原始输入、异常文本或字段值。 */
+export interface DeliveryErrorDetails {
+  code?: string; phase?: 'preflight' | 'execution'; status?: number; valuesOmitted?: boolean;
+  fieldsCount?: number; fields?: { index: number; reason?: string; field?: string }[];
+  failedCount?: number; failed?: { index: number; reason?: string; name?: string }[];
+}
 export interface EventDelivery {
   id: string; eventId: string; name: string; state: string; attempts: number; error: string | null;
+  errorMessage?: string | null; typeVersion?: string | null; ontologyVersion?: string | null; subscriptionFilter?: string;
   version: number; startedAt: string | null; finishedAt: string | null; isTest: boolean; objectId: string; idempotencyKey: string;
   result: {
     httpStatus?: number; actionId?: string; actionRunId?: string; ruleId?: string; ruleVersion?: string; hitId?: string; alertId?: string;
@@ -296,12 +303,15 @@ export const getEventDeliveries = (id: string, page = 1) =>
   api.get<EventDeliveryStatus>(`/events/${enc(id)}/deliveries`, { query: { page, size: 10 } });
 export interface DeliveryHistory {
   id: string; kind: string; attempt: number; state: string; error: string | null; result: EventDelivery['result']; at: string; actor: string;
-  detail: { decision?: string; reason?: string; evidence?: string; before?: { state: string; error: string | null }; previousError?: string | null };
+  detail: { decision?: string; reason?: string; evidence?: string; before?: { state: string; error: string | null }; previousError?: string | null; errorDetails?: DeliveryErrorDetails | null };
 }
-export interface DeliveryDetail extends EventDelivery { history: PageResult<DeliveryHistory>; canManage: boolean; decisions: DeliveryDecision[] }
+export interface DeliveryDetail extends EventDelivery { history: PageResult<DeliveryHistory>; canManage: boolean; decisions: DeliveryDecision[]; errorDetails?: DeliveryErrorDetails | null }
 export type DeliveryDecision = 'received' | 'skip' | 'retry' | 'supplement';
-export const listDeliveryExceptions = (typeId: string, state: string, kw: string, page = 1) =>
-  api.get<PageResult<EventDelivery>>(`/event-types/${enc(typeId)}/delivery-exceptions`, { query: { state: state || undefined, kw, page, size: 10 } });
+export const listDeliveryExceptions = async (typeId: string, state: string, kw: string, page = 1, errorCode = '') => {
+  const result = await api.get<PageResult<EventDelivery> & { errorFilter?: string | null }>(`/event-types/${enc(typeId)}/delivery-exceptions`, { query: { state: state || undefined, kw, page, size: 10, error: errorCode || undefined } });
+  if (errorCode && result.errorFilter !== errorCode) throw new Error('当前服务尚不支持原因筛选，请更新服务后重试');
+  return result;
+};
 export const getDeliveryDetail = (id: string, page = 1) =>
   api.get<DeliveryDetail>(`/event-deliveries/${enc(id)}`, { query: { page, size: 10 } });
 export const disposeDelivery = (id: string, body: { version: number; decision: DeliveryDecision; reason: string; evidence: string; authorized: true }) =>

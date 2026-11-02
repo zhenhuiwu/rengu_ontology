@@ -30,7 +30,7 @@ import { RULE_DEFS } from '@/mock/rules';
 import { legacyRevs } from '@/mock/objectHistory';
 import { fetchObjectOverviewRuntime, type ObjectOverviewRuntime } from '@/api/objectOverview';
 import { definitionDetail, type DefinitionValues } from '@/api/definitionForms';
-import { applyModelChange, fetchCurrentAfterWrite, staticContextKey, isStaticReal, fetchStaticDetail } from '@/api/static';
+import { applyModelChange, fetchCurrentAfterWrite, staticContextKey, isStaticReal, fetchStaticDetail, deleteObjectType, objectDeleteVersions } from '@/api/static';
 import { useStaticPage } from './parts/useStaticPage';
 import MetricsTab from './parts/object/MetricsTab.vue';
 import ViewsTab from './parts/object/ViewsTab.vue';
@@ -179,6 +179,26 @@ type P = ObjProp;
 /** 草稿里新增的属性（只在本页内存里，提交审核时随草稿走），不改 mock */
 const ADDED = reactive<Record<string, P[]>>({});
 const confirm = useConfirmStore();
+const deletingObject = ref(false);
+async function deleteCurrentObject() {
+  if (readonly.value || deletingObject.value || !current.value.id) return;
+  const id = current.value.id, key = staticContextKey();
+  deletingObject.value = true;
+  try {
+    const versions = await objectDeleteVersions(id);
+    if (key !== staticContextKey() || id !== current.value.id) return;
+    const ok = await confirm.ask({ title: '删除对象类型', target: `${current.value.name}（${current.value.api}）`, okText: '删除', danger: true,
+      impact: '删除立即生效，历史版本保留；源数据库中的表和数据不会删除。存在引用时无法删除。' });
+    if (!ok || key !== staticContextKey() || id !== current.value.id) return;
+    await deleteObjectType(id, versions);
+    const i = TYPES.findIndex(t => t.id === id); if (i >= 0) TYPES.splice(i, 1);
+    firstId.value = '';
+    await router.replace({ query: { ...route.query, type: undefined, view: undefined } });
+    await objectPage.reload();
+    message.success('对象类型已删除');
+  } catch (e) { message.error(e instanceof Error ? e.message : String(e)); }
+  finally { deletingObject.value = false; }
+}
 async function discardDraft() {
   const d = draft.value;
   if (!d) return;
@@ -332,7 +352,7 @@ const realDetail = ref<Partial<DefinitionValues>>({});
 const detailError = ref('');
 const runtime = ref<ObjectOverviewRuntime | null>(null);
 let detailSeq = 0;
-watch(() => [selected.value, staticContextKey(), route.query.view, workflow.loading.value,
+watch(() => [selected.value, staticContextKey(), app.ontologyVersion, route.query.view, workflow.loading.value,
   draft.value?.id, cr.loading.value, cr.error.value, newTarget.value], async () => {
   const my = ++detailSeq, id = selected.value, key = staticContextKey(); realDetail.value = {}; detailError.value = ''; runtime.value = null;
   if (!isStaticReal() || !selected.value || newTarget.value || (route.query.view === 'draft' && workflow.loading.value)
@@ -415,6 +435,7 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
         @submit="cr.submit" @discard="discardDraft" />
       <div class="ot-head">
         <span class="t-16 fw-600 c-1">{{ current.name }}</span><a-tooltip v-if="isStaticReal()" :title="readonly ? reason : ''"><a-button size="small" :disabled="readonly" @click="openDefinition()">编辑定义</a-button></a-tooltip>
+        <a-button v-if="isStaticReal() && !newTarget" size="small" danger :disabled="readonly || deletingObject" :loading="deletingObject" @click="deleteCurrentObject">删除</a-button>
         <span class="t-14 c-3 num">{{ current.api }} · {{ PROPS.length }} 个属性 · {{ current.count }} 条</span>
         <a-tag v-if="!(shownStatus(current) === '草稿中' && draft && !readonly)" :color="statusColor(current)">{{ shownStatus(current) }}</a-tag>
         <a-segmented v-if="draft && !readonly && !newTarget" size="small" :value="isDraft ? 'draft' : 'published'"
@@ -622,7 +643,7 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
 .ot-detail { flex: 1; }
 .ot-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
 .ot-sp { flex: 1; }
-.ot-body { flex: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+.ot-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
 .ot-empty { align-items: center; justify-content: center; }
 .ot-ov { flex-direction: row; gap: 16px; }
 .ot-ov-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }

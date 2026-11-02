@@ -9,6 +9,7 @@
  * GET /action-types/{id}/stats/daily（取到之前 / 后台没起来用 mock runDaily）。引用规则走 /used-by（关系随版本，告警为实时统计）。
  */
 import ActionHttpMappingEditor from './ActionHttpMappingEditor.vue';
+import HttpEndpointSelect from './parts/HttpEndpointSelect.vue';
 import { computed, reactive, ref, watch, onScopeDispose } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
@@ -167,8 +168,8 @@ const paramSec = de.section<ActionParam>('params', () => paramsOf(cur.value), (p
 const condSec = de.section<SubmitCond>('conds', () => condsOf(cur.value), (c) => c.name);
 const editSec = de.section<OntologyEdit>('edits', () => writebackOf(cur.value).edits, (e) => `${e.op}:${e.obj}`);
 const effSec = de.section<SideEffect>('effects', () => writebackOf(cur.value).effects, (e) => e.target);
-interface WbCfg { sysId: string | null; endpoint: string; idemKey: string; httpMapping?: any }
-const cfgSec = de.section<WbCfg>('config', () => [{ sysId: cur.value.sysId, endpoint: cur.value.endpoint, idemKey: cur.value.idemKey, httpMapping: cur.value.httpMapping ?? null }], () => 'cfg');
+interface WbCfg { sysId: string | null; endpoint: string; idemKey: string; httpMapping?: any; httpEndpointId?: string | null }
+const cfgSec = de.section<WbCfg>('config', () => [{ sysId: cur.value.sysId, endpoint: cur.value.endpoint, idemKey: cur.value.idemKey, httpMapping: cur.value.httpMapping ?? null, httpEndpointId: cur.value.httpEndpointId ?? null }], () => 'cfg');
 const policyInfo = computed(() => cur.value as ActionType & { policyStatus?: string; policyStored?: unknown });
 const policySec = de.section<unknown>('policy', () => policyInfo.value.policyStored == null ? [] : [policyInfo.value.policyStored], () => 'policy');
 const shownPolicy = computed(() => policySec.rows.value[0]?.data);
@@ -200,7 +201,10 @@ const PARAM_TYPES = ['字符串', '整数', '金额', '日期', '日期时间', 
 const FORMS: Record<SecName, { title: string; fields: () => FieldDef[]; blank: () => any }> = {
   params: { title: '参数', blank: () => ({ name: '', api: '', type: '字符串', required: false, def: '—', rule: '—' }), fields: () => [
     { k: 'name', label: '参数名', required: true }, { k: 'api', label: 'API 名', required: true },
-    { k: 'type', label: '类型', kind: 'select', options: PARAM_TYPES.map((t) => ({ value: t, label: t })) },
+    { k: 'type', label: '类型', kind: 'select', options: real ? [
+      ...PARAM_TYPES.filter(t => !t.startsWith('对象引用')).map(t => ({ value: t, label: t })),
+      ...(mappingOptions.value?.objects ?? []).map(o => ({ value: `对象引用 · ${o.api}`, label: `对象引用 · ${o.name}（${o.api}）` })),
+    ] : PARAM_TYPES.map((t) => ({ value: t, label: t })) },
     { k: 'required', label: '必填', kind: 'switch' }, { k: 'def', label: '默认值' }, { k: 'rule', label: '校验' }] },
   conds: { title: '提交条件', blank: () => ({ kind: '参数', name: '', expr: '', fail: '' }), fields: () => [
     { k: 'kind', label: '模板', kind: 'select', options: ['当前用户', '参数', '上下文对象'].map((t) => ({ value: t, label: t })) },
@@ -228,7 +232,7 @@ function openEdit(sec: SecName, key: string) {
   if (row) Object.assign(editor, { open: true, sec, key, form: JSON.parse(JSON.stringify(row.data)) });
 }
 function saveEditor() {
-  if (editor.sec === 'config' && editor.form.sysId && !httpMappingEditor.value?.validate()) { message.warning('请完整填写有效的 HTTP 字段映射'); return; }
+  if (editor.sec === 'config' && editor.form.sysId && !editor.form.httpEndpointId && !httpMappingEditor.value?.validate()) { message.warning('请完整填写有效的 HTTP 字段映射'); return; }
   if (editor.sec === 'config' && !editor.form.sysId) editor.form.httpMapping = null;
   if (real && editor.sec === 'params' && !paramFunctionEditor.value?.validate()) {
     message.warning('请选择有效的计算函数、固定版本和输入参数'); return;
@@ -308,7 +312,7 @@ const usedBy = computed(() => live.value ? (usedState.key === usedContext() ? us
 const usedCols = [
   { title: '规则', key: 'rule', width: 220 },
   { title: '触发', dataIndex: 'trigger', width: 96 },
-  { title: '使用方式', dataIndex: 'mode', ellipsis: { showTitle: true } },
+  { title: '使用方式', dataIndex: 'mode', width: 160, ellipsis: { showTitle: true } },
   { title: '告警（实时）', key: 'alerts', width: 120, align: 'right' as const },
 ];
 /* 近 14 天执行量：真接口按选中类型取；typeId 对不上（切换中 / 草稿新类型 404）时读 mock */
@@ -405,8 +409,8 @@ const flow = computed(() => {
 const mappingOptions = ref<ActionExecutionOptions | null>(null);
 if (real) watch([tab, actionContextKey], async () => {
   const context = actionContextKey(); mappingOptions.value = null;
-  if (tab.value !== 'writeback') return;
-  try { const options = await getActionExecutionOptions(); if (mounted && context === actionContextKey() && tab.value === 'writeback') mappingOptions.value = options; }
+  if (!['writeback', 'params'].includes(tab.value)) return;
+  try { const options = await getActionExecutionOptions(); if (mounted && context === actionContextKey() && ['writeback', 'params'].includes(tab.value)) mappingOptions.value = options; }
   catch { /* The mapping remains readable using its field names. */ }
 }, { immediate: true });
 function mappingDescription(raw: string, objectId: string) {
@@ -559,7 +563,7 @@ const verCols = [
             <a-descriptions-item label="说明" :span="2"><span class="at-ell" :title="cur.desc">{{ cur.desc }}</span></a-descriptions-item>
             <a-descriptions-item label="谁可以执行"><span class="at-ell" :title="cur.runners">{{ cur.runners }}</span></a-descriptions-item>
             <a-descriptions-item label="写回系统">{{ eff.system }}<span v-if="eff.sysId" class="num"> · {{ eff.sysId }}</span></a-descriptions-item>
-            <a-descriptions-item label="写回接口"><span class="num">{{ eff.endpoint }}</span></a-descriptions-item>
+            <a-descriptions-item label="写回接口" :span="2"><span class="num">{{ eff.endpoint }}</span></a-descriptions-item>
             <a-descriptions-item label="幂等键规则" :span="2"><span class="num">{{ eff.idemKey }}</span></a-descriptions-item>
             <a-descriptions-item label="超时"><span class="at-ell" :title="eff.timeout">{{ eff.timeout }}</span></a-descriptions-item>
             <a-descriptions-item label="重试"><span class="at-ell" :title="eff.retry">{{ eff.retry }}</span></a-descriptions-item>
@@ -616,7 +620,7 @@ const verCols = [
               </span>
             </div>
           </template>
-          <a-empty v-else class="at-empty" description="草稿未发布，暂无执行记录" />
+          <a-empty v-else class="at-empty" description="近 30 天暂无执行记录" />
         </div>
         </div>
       </div>
@@ -694,7 +698,7 @@ const verCols = [
               {{ eff.system }}<span v-if="eff.sysId" class="num"> · {{ eff.sysId }}</span><span v-if="cfgMark && cfgBase && cfgBase.sysId !== eff.sysId"> · 原 {{ resolvedSystem({ ...cur, ...cfgBase }).system }}</span>
             </a-descriptions-item>
             <a-descriptions-item label="接口"><span class="num">{{ eff.endpoint }}</span></a-descriptions-item>
-            <a-descriptions-item label="HTTP 字段映射" :span="2">{{ eff.httpMapping ? '已配置 · HTTPS POST' : '平台标准请求和响应' }}</a-descriptions-item>
+            <a-descriptions-item label="HTTP 字段映射" :span="2">{{ eff.httpMapping ? '已配置 · HTTP 字段映射' : '平台标准请求和响应' }}</a-descriptions-item>
             <a-descriptions-item label="幂等键" :span="2"><span class="num">{{ eff.idemKey }}</span><span v-if="sys"> · 请求头 {{ sys.idemKey }}</span></a-descriptions-item>
             <a-descriptions-item label="超时"><span class="at-ell" :title="eff.timeout">{{ eff.timeout }}</span></a-descriptions-item>
             <a-descriptions-item label="重试"><span class="at-ell" :title="eff.retry">{{ eff.retry }}</span></a-descriptions-item>
@@ -742,7 +746,7 @@ const verCols = [
       <!-- 执行记录 -->
       <div v-else-if="tab === 'runs'" class="at-body">
         <div class="at-tool">
-          <a-segmented v-model:value="runFilter" :options="RUN_FILTERS" size="small" />
+          <a-segmented v-model:value="runFilter" :options="RUN_FILTERS.map(value => ({ value, label: value === '审批中' ? '历史待处理' : value }))" size="small" />
           <InfoTip text="规则生成的动作先待确认，确认人确认后才提交；点编号查看过程" />
         </div>
         <div class="paged-scroll">
@@ -758,9 +762,10 @@ const verCols = [
                 <ObjRef v-if="record.ruleId" kind="rule" :id="record.ruleId">规则 {{ record.ruleId }}</ObjRef>
                 <span v-else>{{ record.initiator }}</span>
               </template>
+              <template v-else-if="column.dataIndex === 'source'">{{ typeof record.source === 'string' ? record.source : record.source?.type ?? '—' }}</template>
               <template v-else-if="column.key === 'status'">
                 <span v-if="record.status === '结果未知'" class="c-warning at-nw"><QuestionCircleOutlined /> 结果未知 · 待对账</span>
-                <a-badge v-else :status="runBadge(record.status)" :text="record.status" />
+                <a-badge v-else :status="runBadge(record.status)" :text="record.status === '审批中' ? '历史待处理' : record.status" />
               </template>
               <template v-else-if="column.key === 'ms'"><span class="num">{{ (record.ms / 1000).toFixed(2) }} 秒</span></template>
             </template>
@@ -797,19 +802,20 @@ const verCols = [
     <a-form v-else layout="vertical" class="at-form">
       <ActionParamFunctionEditor v-if="real && editor.open && editor.sec === 'params'" ref="paramFunctionEditor" v-model="editor.form.def" :params="flat(paramSec.rows.value)" :parameter-api="editor.form.api" />
       <a-form-item v-for="f in editorDef.fields().filter(f => !(real && editor.sec === 'params' && f.k === 'def' && parameterComputed))" :key="f.k" :label="f.label" :required="f.required">
-        <a-select v-if="f.kind === 'select'" v-model:value="editor.form[f.k]" :options="f.options" />
+        <HttpEndpointSelect v-if="real && editor.sec === 'config' && f.k === 'endpoint'" v-model="editor.form" />
+        <a-select v-else-if="f.kind === 'select'" v-model:value="editor.form[f.k]" :options="f.options" />
         <a-switch v-else-if="f.kind === 'switch'" v-model:checked="editor.form[f.k]" />
         <a-textarea v-else-if="f.kind === 'textarea'" v-model:value="editor.form[f.k]" :rows="2" />
         <a-input v-else v-model:value="editor.form[f.k]" :disabled="f.k === 'endpoint' && editor.sec === 'config' && !editor.form.sysId" />
       </a-form-item>
-      <ActionHttpMappingEditor v-if="real && editor.open && editor.sec === 'config' && editor.form.sysId" ref="httpMappingEditor" v-model="editor.form.httpMapping" :params="flat(paramSec.rows.value).filter(p => p._mark !== '删除')" />
+      <ActionHttpMappingEditor v-if="real && editor.open && editor.sec === 'config' && editor.form.sysId && !editor.form.httpEndpointId" ref="httpMappingEditor" v-model="editor.form.httpMapping" :params="flat(paramSec.rows.value).filter(p => p._mark !== '删除')" />
     </a-form>
     <div class="t-12 c-3">点“保存”立即生效并生成新版本；同一对象的多段改动一次提交。</div>
   </a-modal>
 </template>
 
 <style scoped>
-.at { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
+.at { flex: 1; min-width: 0; min-height: 0; display: flex; gap: var(--gap); }
 .at-list { width: 300px; flex: none; }
 .at-wait { display: flex; align-items: center; justify-content: center; min-height: 240px; }
 .at-filter { padding: 12px 12px 8px; display: flex; gap: 8px; flex: none; }
@@ -830,9 +836,9 @@ const verCols = [
 .at-sp { flex: 1; }
 .at-tabs { padding: 0 16px; flex: none; }
 .at-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
-.at-body { flex: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.at-body { flex: 1; min-width: 0; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
 .at-ov { overflow: auto; }
-.at-ov-content { display: flex; gap: 16px; flex: none; min-height: 100%; }
+.at-ov-content { display: flex; width: 100%; min-width: 0; gap: 16px; flex: none; min-height: 100%; }
 .at-ov-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .at-ov-right { width: 400px; flex: none; display: flex; flex-direction: column; gap: 8px; padding-left: 16px; border-left: var(--border); }
 .at-sec { margin-top: 4px; }

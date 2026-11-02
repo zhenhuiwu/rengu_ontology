@@ -13,9 +13,13 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import { fitColumns } from '@/tableColumns';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
+import ActionHttpMappingEditor from '@/pages/ontology/ActionHttpMappingEditor.vue';
+import { getHttpEndpoints, saveHttpEndpoints, type HttpEndpoint, type HttpEndpointSet } from '@/api/integration';
 import { useConfirmStore } from '@/stores/confirm';
+import { useAuthStore } from '@/stores/auth';
 import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { paginate, EMPTY } from '@/mock';
@@ -28,6 +32,7 @@ import { getActionAuthorizations, saveActionAuthorizations } from '@/api/integra
 
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
 const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] as string) : '');
 const setQuery = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
 const { readonly, reason } = useReadonly();
@@ -47,8 +52,13 @@ function toggleAuthorization(action: { id: string; version: string }, checked: b
   authorization.value.selected = authorization.value.selected.filter(a => a.id !== action.id);
   if (checked) authorization.value.selected.push({ id: action.id, version: action.version, path: authorization.value.paths[0] ?? '' });
 }
+function renewAuthorization(action: { id: string; version: string }) {
+  const entry = authorization.value?.selected.find(s => s.id === action.id);
+  if (entry) entry.version = action.version;
+}
 async function saveAuthorization() {
   if (!authorization.value) return;
+  if (authorization.value.selected.some(s => authorization.value!.actions.some(a => a.id === s.id && a.version !== s.version))) { message.warning('存在旧版本动作授权，请逐项更新至当前版本后再保存'); return; }
   try { await saveActionAuthorizations(authorizationSystem.value, { version: authorization.value.version, actions: authorization.value.selected.filter(s => authorization.value!.actions.some(a => a.id === s.id)) }); authorization.value = null; message.success('动作授权已保存'); } catch (e) { apiFail(e); }
 }
 /** 后台没起来：页面按 mock 渲染（读取不再发请求） */
@@ -154,7 +164,7 @@ async function loadCalls() {
 if (real) watch([() => selected.value.id, contextKey, result, page, callsTick], loadCalls, { immediate: true });
 
 const tl = (r: CallResult) => (r === '成功' ? 'tl-normal' : r === '结果未知' ? 'tl-attention' : 'tl-failed');
-const cols = [
+const cols = fitColumns([
   { title: '时间', key: 'time', width: 160 },
   { title: '动作', dataIndex: 'action', key: 'action', width: 130, ellipsis: true },
   { title: '对象', key: 'target', width: 200, ellipsis: true },
@@ -165,7 +175,7 @@ const cols = [
   { title: 'HTTP', key: 'http', width: 60, align: 'right' as const },
   { title: '结果', key: 'result', width: 150 },
   { title: '操作', key: 'op', width: 60 },
-];
+]);
 
 // 调用详情抽屉
 /** 真接口：抽屉按 ?call= 取详情（只认当前系统的调用，同 mock） */
@@ -252,18 +262,54 @@ async function testCall() {
   finally { testing.value = false; }
 }
 
+const endpointSet = ref<HttpEndpointSet | null>(null);
+const endpointEdit = ref<HttpEndpoint | null>(null);
+const endpointOldId = ref('');
+const endpointBusy = ref(false);
+const endpointParams = ref<string[]>([]);
+const endpointObjectFields = ref<string[]>([]);
+const endpointMappingEditor = ref<{ validate: () => boolean } | null>(null);
+let endpointSeq = 0;
+async function loadEndpoints() {
+  const id = selected.value.id, key = contextKey(), seq = ++endpointSeq;
+  endpointSet.value = null; endpointEdit.value = null;
+  if (!real || !id) return;
+  try { const data = await getHttpEndpoints(id); if (seq === endpointSeq && id === selected.value.id && key === contextKey()) endpointSet.value = data; }
+  catch (e) { if (seq === endpointSeq && key === contextKey()) apiFail(e); }
+}
+watch([() => selected.value.id, contextKey], loadEndpoints, { immediate: true });
+function editEndpoint(row?: HttpEndpoint) {
+  endpointOldId.value = row?.id ?? '';
+  endpointEdit.value = row ? JSON.parse(JSON.stringify(row)) : { id: '', name: '', description: '', purpose: 'action', method: 'POST', path: '', httpMapping: null };
+  endpointParams.value = (endpointEdit.value?.httpMapping?.request ?? []).map((r: any) => r.source).filter((v: unknown): v is string => typeof v === 'string' && v.startsWith('params.')).map((v: string) => v.slice(7));
+  endpointObjectFields.value = (endpointEdit.value?.httpMapping?.request ?? []).map((r: any) => r.source).filter((v: unknown): v is string => typeof v === 'string' && v.startsWith('object.')).map((v: string) => v.slice(7));
+}
+async function persistEndpoint(remove = false) {
+  const row = endpointEdit.value, set = endpointSet.value, id = selected.value.id, key = contextKey();
+  if (!row || !set || endpointBusy.value) return;
+  if (!remove && (!/^[a-z][a-z0-9_]{0,63}$/.test(row.id) || !row.name.trim() || !/^\/(?!\/)[^?#\s]*$/.test(row.path))) { message.warning('请填写有效的接口标识、名称和同源路径'); return; }
+  if (!remove && row.purpose === 'action' && endpointMappingEditor.value && !endpointMappingEditor.value.validate()) { message.warning('请完善请求和响应字段映射'); return; }
+  if (!remove && set.endpoints.some(x => x.id === row.id && x.id !== endpointOldId.value)) { message.warning('接口标识已存在'); return; }
+  const endpoints = set.endpoints.filter(x => x.id !== endpointOldId.value);
+  if (!remove) endpoints.push({ ...row, name: row.name.trim(), httpMapping: row.purpose === 'probe' ? null : row.httpMapping });
+  endpointBusy.value = true;
+  try { const result = await saveHttpEndpoints(id, { version: set.version, endpoints }); if (key === contextKey() && id === selected.value.id) { endpointSet.value = result; endpointEdit.value = null; message.success('接口配置已保存'); } }
+  catch (e) { apiFail(e); } finally { endpointBusy.value = false; }
+}
+
 // 新建 / 编辑外部系统（?edit=EXT-WMS / ?edit=new）
 const CATEGORIES = ['CRM', 'ERP', 'OMS', 'WMS', 'SMS', '物流', '通知', '渠道', '审批', 'Webhook'];
 const AUTHS = ['OAuth 2.0（客户端凭证）', 'AppID + AppSecret（OpenAPI）', 'mTLS + 服务令牌', 'API Key + HMAC 签名', 'AccessKey（RAM 子账号）', 'Token（服务账号）', 'CorpID + Secret', 'AppID + 签名', '无需授权'];
 const OWNERS = ['王敏', '陈立军', '何静', '刘婷', '孙浩然', '吴佳'];
 const blank = (): ExtSystem => ({
   id: '', name: '', vendor: '', category: 'ERP', endpoint: 'https://', auth: AUTHS[0], authDetail: '', idempotent: true, idemKey: 'X-Idempotency-Key',
-  timeoutMs: 5000, maxRetry: 3, retry: '', rateLimit: '10 次/秒', owner: '王敏', status: '正常', env: '生产',
+  timeoutMs: 5000, maxRetry: 3, retry: '', rateLimit: '10 次/秒', owner: real ? auth.user?.name || auth.user?.account || '' : OWNERS[0], status: '正常', env: '生产',
 });
 const editKey = computed(() => q('edit'));
 const editingRecord = ref<{ key: string; item: ExtSystem }>();
 const editing = computed(() => editKey.value === 'new' ? null : real ? editingRecord.value?.key === contextKey() && editingRecord.value.item.id === editKey.value ? editingRecord.value.item : null : systems.find((s) => s.id === editKey.value) ?? null);
 const form = reactive<ExtSystem>(blank());
+const ownerOptions = computed(() => [...new Set([auth.user?.name || auth.user?.account || '', form.owner, ...(real ? systems.map(s => s.owner) : OWNERS)].filter(Boolean))].map(value => ({ value, label: value })));
 const formSnap = ref('');
 let editSeq = 0;
 watch([editKey, contextKey], async ([k, key]) => {
@@ -294,8 +340,14 @@ const formErrors = computed(() => {
   const endpoint = form.endpoint.trim();
   try {
     const url = new URL(endpoint);
-    if (!/^https?:\/\/[^/?#\s]+$/i.test(endpoint) || !['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password || url.port === '0') throw new Error();
-  } catch { e.push('接口地址需为不含路径、凭据或查询参数的 HTTP(S) 来源地址'); }
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.port === '0' || /[\s\\]/.test(endpoint)) e.push('系统地址须为有效的 HTTP 或 HTTPS 地址');
+    else if (url.username || url.password || /^https?:\/\/[^/]*@/i.test(endpoint)) e.push('系统地址不能包含用户名或密码，请使用认证配置');
+    else if (endpoint.includes('?') || endpoint.includes('#')) e.push('系统地址暂不支持查询参数或片段，请在接口中配置请求参数');
+    else {
+      const rawPath = endpoint.match(/^https?:\/\/[^/]+(\/.*)?$/i)?.[1] ?? '';
+      if (rawPath && (!/^\/(?:[A-Za-z0-9_~.!$&'()*+,;=:@-]+(?:\/[A-Za-z0-9_~.!$&'()*+,;=:@-]+)*\/?)?$/.test(rawPath) || rawPath.split('/').some(part => part === '.' || part === '..'))) e.push('基础路径格式无效，请使用如 /api 的规范路径');
+    }
+  } catch { e.push('系统地址须为有效的 HTTP 或 HTTPS 地址'); }
   if (form.idempotent && !form.idemKey.trim()) e.push('支持幂等时需填写幂等键');
   if (!(form.timeoutMs >= 1000 && form.timeoutMs <= 60000)) e.push('超时需在 1～60 秒之间');
   return e;
@@ -369,7 +421,6 @@ async function saveEdit() {
       <div class="ex-items">
         <div v-for="s in systems" :key="s.id" class="ex-item" :class="{ on: s.id === selected.id }" @click="setQuery({ sys: s.id, result: undefined, call: undefined })">
           <div class="ex-l1" :title="`${s.name} · ${s.vendor} · ${s.env} · ${actionCount(s) ? actionCount(s) + ' 个动作' : '无动作写回'} · ${s.idempotent ? '支持幂等' : '不支持幂等'}`">
-            <span class="ex-cat t-12">{{ s.category }}</span>
             <span class="t-14 fw-600 c-1 ex-ellip">{{ s.name }}</span>
             <a-tooltip :title="s.status === '降级' ? '最近 6 次调用有失败 / 结果未知' : undefined"><a-badge :status="statusBadge(s.status)" :text="s.status" class="ex-badge" /></a-tooltip>
           </div>
@@ -381,7 +432,7 @@ async function saveEdit() {
     <div v-if="!real || selected.id" class="panel ex-detail">
       <div class="ex-head">
         <div class="ex-title">
-          <span class="t-20 fw-600 c-1">{{ selected.name }}</span>
+          <span class="t-20 fw-600 c-1 ex-ellip" :title="selected.name">{{ selected.name }}</span>
           <a-tag>{{ selected.category }}</a-tag>
           <a-tag>{{ selected.env }}</a-tag>
           <a-badge :status="statusBadge(selected.status)" :text="selected.status" />
@@ -416,6 +467,15 @@ async function saveEdit() {
             <span v-else class="c-3">暂无关联动作类型</span>
           </a-descriptions-item>
         </a-descriptions>
+      </div>
+      <div v-if="real" class="ex-interfaces">
+        <div class="ex-calls-head"><span class="t-16 fw-600">系统接口</span><a-button size="small" :disabled="readonly || !endpointSet" @click="editEndpoint()">新建接口</a-button></div>
+        <div v-if="!endpointSet?.endpoints.length" class="c-3 ex-interface-empty">暂无接口。添加只读探测或业务执行接口。</div>
+        <div v-for="item in endpointSet?.endpoints" :key="item.id" class="ex-interface-row">
+          <div><strong>{{ item.name }}</strong><span class="c-3"> · {{ item.purpose === 'probe' ? '只读探测' : '业务执行' }}</span><div class="num c-2">{{ item.method }} {{ item.path }}</div><div v-if="item.description" class="c-3">{{ item.description }}</div></div>
+          <div class="c-3">{{ realLinked?.items.filter(a => a.httpEndpointId ? a.httpEndpointId === item.id : a.endpoint === `${item.method} ${item.path}`).map(a => a.name).join('、') || '暂无关联动作' }}</div>
+          <a-button size="small" :disabled="readonly" @click="editEndpoint(item)">配置</a-button>
+        </div>
       </div>
       <div class="ex-calls-head">
         <span class="t-16 fw-600">最近调用</span>
@@ -485,10 +545,10 @@ async function saveEdit() {
         <a-form-item label="供应商 / 产品" required class="ex-f2"><a-input v-model:value="form.vendor" placeholder="例如：富勒 FLUX" /></a-form-item>
         <a-form-item label="环境" class="ex-f1"><a-select v-model:value="form.env" :options="['生产', '测试'].map((v) => ({ value: v, label: v }))" /></a-form-item>
       </div>
-      <a-form-item label="接口地址" required><a-input v-model:value="form.endpoint" class="num" /></a-form-item>
+      <a-form-item label="系统基础地址" required extra="支持 HTTP 或 HTTPS，可包含基础路径，例如 http://host:8080/api"><a-input v-model:value="form.endpoint" class="num" /></a-form-item>
       <div class="ex-row">
         <a-form-item label="认证方式" class="ex-f2"><a-select v-model:value="form.auth" :options="AUTHS.map((v) => ({ value: v, label: v }))" /></a-form-item>
-        <a-form-item label="负责人" class="ex-f1"><a-select v-model:value="form.owner" :options="OWNERS.map((v) => ({ value: v, label: v }))" /></a-form-item>
+        <a-form-item label="负责人" class="ex-f1"><a-select v-model:value="form.owner" :options="ownerOptions" /></a-form-item>
       </div>
       <a-form-item v-if="form.auth !== '无需授权'" label="凭证说明" extra="只写标识（如 AppKey、证书名），密钥在密钥库录入，界面不回显"><a-input v-model:value="form.authDetail" /></a-form-item>
       <div v-else class="t-12 c-3">不发送已配置的令牌；切回其他认证方式时会继续使用。消息签名按单独配置执行。</div>
@@ -513,15 +573,26 @@ async function saveEdit() {
       </div>
     </template>
   </a-drawer>
+  <a-modal :open="!!endpointEdit" title="配置系统接口" :width="720" ok-text="保存" :confirm-loading="endpointBusy" @cancel="endpointEdit = null" @ok="persistEndpoint()">
+    <a-form v-if="endpointEdit" layout="vertical">
+      <div class="ex-row"><a-form-item class="ex-f1" label="接口名称" required><a-input v-model:value="endpointEdit.name" maxlength="64" /></a-form-item><a-form-item class="ex-f1" label="接口标识" required extra="小写字母开头，可含数字和下划线"><a-input v-model:value="endpointEdit.id" :disabled="!!endpointOldId" /></a-form-item></div>
+      <div class="ex-row"><a-form-item class="ex-f1" label="用途"><a-select v-model:value="endpointEdit.purpose" :options="[{value:'probe',label:'只读探测'}, {value:'action',label:'业务执行'}]" @change="endpointEdit.method = endpointEdit.purpose === 'probe' ? 'GET' : 'POST'" /></a-form-item><a-form-item class="ex-f1" label="方法"><a-select v-model:value="endpointEdit.method" :options="(endpointEdit.purpose === 'probe' ? ['GET'] : ['POST','PUT','PATCH']).map(v => ({value:v,label:v}))" /></a-form-item><a-form-item class="ex-f2" label="相对路径" required extra="附加到系统基础路径，例如基础地址 /api 加上 /health 得到 /api/health"><a-input v-model:value="endpointEdit.path" placeholder="例如 /health" /></a-form-item></div>
+      <a-form-item label="用途说明"><a-textarea v-model:value="endpointEdit.description" :rows="2" :maxlength="500" /></a-form-item>
+      <template v-if="endpointEdit.purpose === 'action'"><a-form-item label="动作参数 API 名" extra="需要引用动作参数时填写；参数必须在动作中存在"><a-select v-model:value="endpointParams" mode="tags" placeholder="输入后按回车添加" /></a-form-item><a-form-item label="对象属性 API 名" extra="须为动作目标对象中有读取权限的属性"><a-select v-model:value="endpointObjectFields" mode="tags" placeholder="输入后按回车添加" /></a-form-item><ActionHttpMappingEditor ref="endpointMappingEditor" v-model="endpointEdit.httpMapping" :params="endpointParams.map(v => ({api:v,name:v}))" :object-fields="endpointObjectFields" /></template>
+      <p class="t-12 c-3">业务接口还需为已发布动作配置授权，部署网络白名单仍生效。</p>
+      <a-popconfirm v-if="endpointOldId" title="删除后关联该接口的动作将无法继续执行，确定删除？" @confirm="persistEndpoint(true)"><a-button danger :disabled="endpointBusy">删除接口</a-button></a-popconfirm>
+    </a-form>
+  </a-modal>
   <a-modal :open="!!probe" title="只读探测配置" ok-text="保存" :confirm-loading="probeBusy" :closable="!probeBusy" :mask-closable="!probeBusy" @cancel="probe = null" @ok="saveProbe">
-    <template v-if="probe"><p class="t-12 c-3">来源地址：{{ probe.endpoint }}</p><a-form-item label="探测路径" extra="可留空以关闭探测；仅同源只读路径，实际探测还需部署网络白名单。业务动作授权另行配置。"><a-input v-model:value="probe.probePath" placeholder="例如 /health" /></a-form-item></template>
+    <template v-if="probe"><p class="t-12 c-3">系统基础地址：{{ probe.endpoint }}</p><a-form-item label="探测路径" extra="可留空以关闭探测；路径附加在系统基础地址之后。探测需部署网络授权，业务动作授权另行配置。"><a-input v-model:value="probe.probePath" placeholder="例如 /health" /></a-form-item></template>
   </a-modal>
   <a-modal :open="!!authorization" title="动作授权" ok-text="保存授权" @cancel="authorization = null" @ok="saveAuthorization">
     <template v-if="authorization">
-      <p>请选择已发布动作及部署允许的目标路径。</p>
+      <p>请选择已发布动作及部署允许的目标路径。动作发布新版本后需重新确认授权。</p>
       <div v-for="a in authorization.actions" :key="a.id" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px">
         <a-checkbox :checked="authorization.selected.some(s => s.id === a.id)" @change="toggleAuthorization(a, $event.target.checked)">{{ a.name }} · {{ a.id }} · {{ a.version }}</a-checkbox>
-        <a-select v-if="authorization.selected.find(s => s.id === a.id)" :value="authorization.selected.find(s => s.id === a.id)?.path" :options="authorization.paths.map(path => ({ label: path, value: path }))" style="min-width: 200px; flex: 1" @change="(path: string) => { const row = authorization!.selected.find(s => s.id === a.id); if (row) { row.path = path; row.version = a.version; } }" />
+        <template v-if="authorization.selected.some(s => s.id === a.id && s.version !== a.version)"><span>已授权 {{ authorization.selected.find(s => s.id === a.id)?.version }}，版本已过期</span><a-button size="small" @click="renewAuthorization(a)">更新授权至 {{ a.version }}</a-button></template>
+        <a-select v-if="authorization.selected.find(s => s.id === a.id)" :value="authorization.selected.find(s => s.id === a.id)?.path" :options="authorization.paths.map(path => ({ label: path, value: path }))" style="min-width: 200px; flex: 1" @change="(path: string) => { const row = authorization!.selected.find(s => s.id === a.id); if (row) row.path = path; }" />
       </div>
       <p v-if="authorization.selected.some(s => !authorization!.actions.some(a => a.id === s.id))">部分原授权的动作已不再发布，保存时将移除。</p>
     </template>
@@ -542,10 +613,19 @@ async function saveEdit() {
 .ex-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ex-badge { margin-left: auto; flex: none; }
 .ex-detail { flex: 1; min-width: 0; }
-.ex-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px 10px; }
-.ex-title { display: flex; align-items: center; gap: 10px; }
+.ex-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; padding: 14px 20px 10px; min-width: 0; }
+.ex-title { display: flex; flex: 1 1 480px; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
+.ex-title > .ex-ellip { max-width: 100%; }
+.ex-head :deep(.ant-space) { flex-wrap: wrap; }
 .ex-cfg { padding: 0 20px; flex: none; }
 .ex-desc :deep(.ant-descriptions-item-label) { width: 120px; }
+.ex-desc :deep(.ant-descriptions-view > table) { width: 100%; table-layout: fixed; }
+.ex-desc :deep(.ant-descriptions-item-content) { overflow-wrap: anywhere; }
+.ex-interfaces { padding: 0 20px; flex: none; max-height: 280px; overflow: auto; }
+.ex-interfaces .ex-calls-head { padding: 14px 0 8px; }
+.ex-interface-empty { padding: 10px 0; }
+.ex-interface-row { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 9px 0; border-bottom: var(--border); }
+.ex-interface-row > div { min-width: 0; overflow-wrap: anywhere; }
 .ex-calls-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px 8px; flex: none; }
 .ex-table { flex: 1; min-height: 0; padding: 0 20px; }
 .ex-pager { padding: 6px 20px 8px; }
@@ -555,7 +635,7 @@ async function saveEdit() {
 .ex-dr-msg { margin: 4px 0 12px 16px; }
 .ex-dr-note { margin: -4px 0 12px 16px; padding: 8px 12px; background: var(--g2); border-radius: var(--radius); }
 .ex-dr-sub { margin: 16px 0 6px; }
-.ex-pre { background: var(--g2); border: var(--border); border-radius: var(--radius); padding: 8px 12px; margin: 0; color: var(--g9); white-space: pre-wrap; }
+.ex-pre { background: var(--g2); border: var(--border); border-radius: var(--radius); padding: 8px 12px; margin: 0; color: var(--g9); white-space: pre-wrap; overflow-wrap: anywhere; }
 .ex-foot { display: flex; justify-content: flex-end; }
 .ex-foot-gap { gap: 8px; align-items: center; }
 .ex-err { margin-right: auto; }

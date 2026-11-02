@@ -72,24 +72,24 @@ const columns = computed(() => [
   { title: '复购客户（人）', dataIndex: 'customers', key: 'customers', align: 'right' as const },
   { title: '占比', key: 'share', align: 'right' as const },
 ]);
-const axis = { axisLine: { lineStyle: { color: GRAY.g6 } }, axisTick: { show: false }, axisLabel: { color: GRAY.g8, fontSize: 12 } };
-const valueAxis = { type: 'value', min: 0, splitNumber: 4, axisLabel: { color: GRAY.g8, fontSize: 12 }, splitLine: { lineStyle: { color: GRAY.g4 } } };
-const label = { show: true, fontSize: 12, color: GRAY.g9, formatter: (p: { value: number }) => f1(p.value) };
-const trendOption = {
+const axis = () => ({ axisLine: { lineStyle: { color: GRAY.g6 } }, axisTick: { show: false }, axisLabel: { color: GRAY.g8, fontSize: 12 } });
+const valueAxis = () => ({ type: 'value', min: 0, splitNumber: 4, axisLabel: { color: GRAY.g8, fontSize: 12 }, splitLine: { lineStyle: { color: GRAY.g4 } } });
+const label = () => ({ show: true, fontSize: 12, color: GRAY.g9, formatter: (p: { value: number }) => f1(p.value) });
+const trendOption = computed(() => ({
   grid: { left: 44, right: 44, top: 20, bottom: 22 },
   tooltip: { trigger: 'axis' },
-  xAxis: { type: 'category', data: QA_TREND.months, ...axis },
-  yAxis: valueAxis,
-  series: [{ type: 'line', symbol: 'circle', symbolSize: 5, lineStyle: { width: 2 }, label,
+  xAxis: { type: 'category', data: QA_TREND.months, ...axis() },
+  yAxis: valueAxis(),
+  series: [{ type: 'line', symbol: 'circle', symbolSize: 5, lineStyle: { width: 2 }, label: label(),
     data: QA_TREND.values.map((v, i) => (i === QA_TREND.values.length - 1 ? { value: v, label: { position: 'right' } } : v)) }],
-};
+}));
 const avg = QA_TOTAL_SALES / QA_PROVINCES.length;
 const barOption = computed(() => ({
   grid: { left: 44, right: 16, top: 24, bottom: 22 },
   tooltip: { trigger: 'axis' },
-  xAxis: { type: 'category', data: QA_PROVINCES.map((p) => p.province), ...axis },
-  yAxis: valueAxis,
-  series: [{ type: 'bar', barMaxWidth: 28, data: QA_PROVINCES.map((p) => p.sales), label: { ...label, position: 'top' },
+  xAxis: { type: 'category', data: QA_PROVINCES.map((p) => p.province), ...axis() },
+  yAxis: valueAxis(),
+  series: [{ type: 'bar', barMaxWidth: 28, data: QA_PROVINCES.map((p) => p.sales), label: { ...label(), position: 'top' },
     markLine: { symbol: 'none', silent: true, lineStyle: { color: GRAY.g7, type: 'dashed' },
       label: { position: 'insideEndTop', fontSize: 12, color: GRAY.g8, formatter: `省均 ${f1(avg)}` }, data: [{ yAxis: avg }] } }],
 }));

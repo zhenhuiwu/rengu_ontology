@@ -14,6 +14,7 @@ export default defineConfig(({ mode }) => {
     optimizeDeps: {
       include: ['ant-design-vue', '@ant-design/icons-vue', 'echarts', 'vue-echarts', '@antv/x6', 'dayjs', 'pinia', 'vue-router'],
     },
-    build: { chunkSizeWarningLimit: 4000 },
+    // Keep the existing Vite modules baseline (including Chrome 102), rather than raising the minimum.
+    build: { target: ['es2020', 'chrome87', 'edge88', 'firefox78', 'safari14'], cssTarget: ['chrome87', 'edge88', 'firefox78', 'safari14'], chunkSizeWarningLimit: 4000 },
   };
 });

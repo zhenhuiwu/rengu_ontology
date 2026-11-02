@@ -1,10 +1,12 @@
 import { computed, ref, watch, type WatchSource } from 'vue';
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
+import { useAdaptivePageSize, type AdaptivePageSizeOptions, type PageSizeMode } from './useAdaptivePageSize';
 
 /**
  * 分页状态同步到 URL：?page=&size=（第 1 页、默认条数时不写进 URL）。
  * - 列表默认 10 条/页；defaultSize 保留为该容器无需滚动可容纳的条数。
  * - filters：筛选条件变化时自动回到第 1 页。
+ * - adaptive：按独立分配的容器高度自动计算条数；mode 接公共分页的自动/固定选择。
  * - prefix：同一页面有多个分页列表时区分参数，例如 prefix: 'u' → ?upage=&usize=。
  * - overflow：用户选了比默认更大的条数时为 true，此时把表格容器加上 .paged-scroll，
  *   让表格主体成为页面唯一的滚动区（表头吸顶），页面本身仍不出现滚动条。
@@ -13,7 +15,7 @@ import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
  *   const res = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
  *   <AppPagination variant="full" v-model:page="pq.page.value" v-model:size="pq.size.value" :total="res.total" :default-size="pq.defaultSize" />
  */
-export function usePagedQuery(opts: { defaultSize: number; filters?: WatchSource | WatchSource[]; prefix?: string }) {
+export function usePagedQuery(opts: { defaultSize: number; filters?: WatchSource | WatchSource[]; prefix?: string; adaptive?: AdaptivePageSizeOptions }) {
   const route = useRoute();
   const router = useRouter();
   const pk = `${opts.prefix ?? ''}page`;
@@ -32,16 +34,21 @@ export function usePagedQuery(opts: { defaultSize: number; filters?: WatchSource
     get: () => num(route.query[pk], 1),
     set: (v) => setQuery({ [pk]: v > 1 ? v : null }),
   });
+  let adaptive: ReturnType<typeof useAdaptivePageSize> | undefined;
+  const replaceSize = (v: number) => setQuery({ [sk]: v === 10 ? null : v, [pk]: null });
   const size = computed<number>({
     get: () => num(route.query[sk], 10),
     // 改条数时一并回到第 1 页（同一次 replace，避免两次导航互相覆盖）
-    set: (v) => setQuery({ [sk]: v === 10 ? null : v, [pk]: null }),
+    set: (v) => { if (adaptive) adaptive.mode.value = v; else replaceSize(v); },
   });
+  if (opts.adaptive) adaptive = useAdaptivePageSize({ ...opts.adaptive, currentSize: () => size.value, onSizeChange: replaceSize });
+  const mode = adaptive?.mode ?? ref<PageSizeMode | undefined>();
+  if (adaptive) watch(size, (value) => { if (mode.value !== 'auto') mode.value = value; });
   const overflow = computed(() => size.value > opts.defaultSize);
   const reset = () => { if (page.value !== 1) page.value = 1; };
   if (opts.filters) watch(opts.filters as WatchSource[], reset, { deep: true });
 
-  return { page, size, overflow, reset, defaultSize: opts.defaultSize };
+  return { page, size, overflow, reset, defaultSize: opts.defaultSize, mode };
 }
 
 /**

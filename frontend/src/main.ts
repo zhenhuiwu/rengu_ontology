@@ -11,13 +11,15 @@ import 'ant-design-vue/dist/reset.css';
 import './styles/tokens.css';
 import App from './App.vue';
 import { router } from './router';
-import { anyReal, bootstrapApi, setupApi } from './api';
+import { anyReal, setupApi, setUnauthorizedHandler } from './api';
+import { useAuthStore } from './stores/auth';
 
 dayjs.locale('zh-cn');
 
 const app = createApp(App);
 const pinia = createPinia();
 setupApi(pinia);
+setUnauthorizedHandler(() => useAuthStore(pinia).expire());
 function start() {
   app.use(pinia).use(router).use(Antd);
   // 全局提示：同时只显示 1 条；顶栏高度以 tokens.css 的 --topbar-h（48px）为准，提示放在顶栏下沿再往下 8px（= 56px），不挡顶栏搜索框
@@ -28,10 +30,5 @@ function start() {
     .forEach(([n, c]) => app.component(n, c));
   app.mount('#app');
 }
-// 启动先确定身份，工作空间与发布记录由路由守卫验证；真实失败保留错误态。
-if (anyReal()) {
-  bootstrapApi(pinia)
-    .catch((e: unknown) => { console.error('[api] 启动数据加载异常', e); return ['接口启动失败，请刷新后重试']; })
-    .then((warnings) => { start(); warnings.forEach((t) => message.warning(t)); });
-}
-else start();
+// 路由首先恢复 Cookie 会话；认证完成后才挂载应用布局并加载业务数据。
+start();

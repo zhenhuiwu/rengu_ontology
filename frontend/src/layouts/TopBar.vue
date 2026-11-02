@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useAppStore } from '@/stores/app';
-import { loadTenants, tenantOptions } from '@/api/tenants';
+import { useAuthStore } from '@/stores/auth';
 import { loadMyProfile } from '@/api/profile';
 import { workspaceCatalog, type OntologyWorkspace } from '@/api/workspaces';
 import { anyReal } from '@/api/config';
@@ -12,9 +12,21 @@ import { adminApiOn } from '@/api/admin';
 import { PAGES } from '@/nav';
 import VersionPicker from '@/components/VersionPicker.vue';
 import NoticeList from '@/components/NoticeList.vue';
+import ChangePasswordModal from '@/components/ChangePasswordModal.vue';
 import { isNotificationsReal, notificationContextKey, unreadNotifications } from '@/api/notifications';
+import { applyChrome, chrome } from '@/theme';
 
 const app = useAppStore();
+const auth = useAuthStore();
+const signingOut = ref(false);
+const passwordOpen = ref(false);
+async function onUserMenu({ key }: { key: string | number }) {
+  if (key === 'password') { passwordOpen.value = true; return; }
+  if (key !== 'logout' || signingOut.value) return;
+  signingOut.value = true;
+  try { await auth.signOut(); }
+  catch { message.error('退出失败，请重试'); signingOut.value = false; }
+}
 const router = useRouter();
 const workspaces = ref<OntologyWorkspace[]>([]), workspaceListError = ref('');
 let workspaceListSeq = 0;
@@ -35,7 +47,7 @@ let profileSeq = 0;
 async function reloadProfile() {
   if (!adminApiOn()) return;
   const my = ++profileSeq, key = currentApiContext().demoAs;
-  app.user = { name: '', role: '' }; profileLoading.value = true; profileError.value = '';
+  profileLoading.value = true; profileError.value = '';
   try { const profile = await loadMyProfile(); if (my === profileSeq && key === currentApiContext().demoAs && profile) app.user = { name: profile.name, role: profile.roleNames.join('、') || '未分配角色' }; }
   catch { if (my === profileSeq && key === currentApiContext().demoAs) profileError.value = '当前身份加载失败'; }
   finally { if (my === profileSeq && key === currentApiContext().demoAs) profileLoading.value = false; }
@@ -61,22 +73,7 @@ function onKey(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); inputRef.value?.focus(); }
 }
 onMounted(() => window.addEventListener('keydown', onKey));
-// 租户 / 组织：后台 sys_tenant + sys_org（GET /tenants），mock 模式回退 TENANTS
-const tenants = tenantOptions;
-const tenantError = ref('');
-watch(tenants, (options) => {
-  if (options.length) tenantError.value = '';
-  if (!options.some((t) => t.value === app.tenant)) app.tenant = (options.find((t) => t.default) ?? options[0])?.value ?? app.tenant;
-}, { immediate: true });
-async function reloadTenants() {
-  const identity = currentApiContext().demoAs;
-  tenantError.value = '';
-  try {
-    await loadTenants();
-  } catch { if (identity === currentApiContext().demoAs) tenantError.value = '租户与组织加载失败'; }
-}
-watch(() => currentApiContext().demoAs, () => void reloadTenants(), { immediate: true });
-watch(() => router.currentRoute.value.name, (name) => { if (name === 'workspaces') { void reloadProfile(); void reloadTenants(); } });
+watch(() => router.currentRoute.value.name, (name) => { if (name === 'workspaces') void reloadProfile(); });
 // 顶栏 ⓘ 使用帮助菜单（原型：快速入门 / 反馈只给提示）
 function onHelp({ key }: { key: string | number }) {
   if (key === 'kbd') setTimeout(() => inputRef.value?.focus(), 0);
@@ -102,13 +99,12 @@ function onSelect(v: string) {
 
 <template>
   <header class="tb">
-    <router-link to="/" class="tb-brand">
-      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
-        <rect width="20" height="20" rx="3" fill="var(--brand)" />
-        <circle cx="6" cy="6.5" r="2" fill="#fff" /><circle cx="14" cy="6.5" r="2" fill="#fff" /><circle cx="10" cy="14" r="2" fill="#fff" />
-        <path d="M6 6.5H14L10 14Z" stroke="#fff" stroke-width="1.1" fill="none" />
-      </svg>
-      <span class="t-16 fw-600 c-1">本体智能平台</span>
+    <router-link to="/" class="tb-brand" aria-label="仁谷科技">
+      <span class="tb-mark" aria-hidden="true" />
+      <span class="tb-word">
+        <span class="tb-cn">仁谷科技</span>
+        <span class="tb-en">RenGu Technology</span>
+      </span>
     </router-link>
 
     <div v-if="anyReal()" class="tb-workspace">
@@ -116,10 +112,6 @@ function onSelect(v: string) {
       <a-select :value="app.workspace ? app.ontologyId : undefined" :options="workspaceOptions" :loading="app.workspaceLoading" :placeholder="workspaceListError || '选择本体工作空间'" :bordered="false" class="tb-workspace-select" aria-label="本体工作空间" @change="switchWorkspace" />
       <a-button type="text" size="small" @click="router.push({ name: 'workspaces' })">管理</a-button>
     </div>
-    <span class="tb-org-label t-12 c-3">组织</span>
-    <a-select v-model:value="app.tenant" :options="tenants" :placeholder="tenantError || '暂无组织'" :status="tenantError ? 'error' : undefined" :bordered="false" class="tb-tenant" popup-class-name="tb-tenant-pop" />
-    <span v-if="tenantError" class="t-12 c-3">{{ tenantError }} <a-button type="link" size="small" @click="reloadTenants">重试</a-button></span>
-
     <div class="tb-search">
       <a-auto-complete
         v-model:value="q" :options="options()" class="tb-ac" :dropdown-match-select-width="true"
@@ -133,6 +125,11 @@ function onSelect(v: string) {
     </div>
 
     <div class="tb-right">
+      <a-segmented
+        class="tb-chrome" size="small" :value="chrome" aria-label="界面配色"
+        :options="[{ label: '白色', value: 'light' }, { label: '海军蓝', value: 'navy' }]"
+        @change="(value: string | number) => applyChrome(value === 'navy' ? 'navy' : 'light')"
+      />
       <VersionPicker v-if="!app.workspaceError && router.currentRoute.value.name !== 'workspaces'" />
       <a-divider type="vertical" />
       <a-popover v-model:open="noticeOpen" trigger="click" placement="bottomRight">
@@ -154,35 +151,45 @@ function onSelect(v: string) {
           </a-menu>
         </template>
       </a-dropdown>
-      <a-dropdown placement="bottomRight">
-        <span class="tb-user">
+      <a-dropdown placement="bottomRight" :trigger="['click']">
+        <button type="button" class="tb-user" :disabled="signingOut" aria-label="账户菜单">
           <a-avatar :size="24" class="tb-avatar"><span class="t-12">{{ app.user.name.slice(0, 1) || '—' }}</span></a-avatar>
-          <span class="t-14 c-1 tb-user-name" :title="app.user.name">{{ app.user.name || (profileLoading ? '身份加载中' : '用户未提供') }}</span><a-button v-if="profileError" type="link" size="small" :title="profileError" @click.stop="reloadProfile">重试身份</a-button>
-        </span>
+          <span class="t-14 c-1 tb-user-name" :title="profileError || app.user.name">{{ app.user.name || (profileLoading ? '身份加载中' : '用户未提供') }}</span>
+        </button>
         <template #overlay>
-          <a-menu :items="[{ key: 'profile', label: '个人设置' }, { key: 'logout', label: '退出登录' }]" />
+          <a-menu :items="[{ key: 'password', label: '修改密码', disabled: signingOut }, { key: 'logout', label: signingOut ? '正在退出…' : '退出登录', disabled: signingOut }]" @click="onUserMenu" />
         </template>
       </a-dropdown>
     </div>
   </header>
+  <ChangePasswordModal v-model:open="passwordOpen" />
 </template>
 
 <style scoped>
-.tb { height: var(--topbar-h); flex: none; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: var(--g1); border-bottom: var(--border); }
-.tb-brand { flex: none; display: flex; align-items: center; gap: 8px; width: calc(var(--sider-w) - 16px); text-decoration: none; }
-.tb-tenant { width: 210px; flex: none; }
-.tb-org-label { margin-right: -12px; }
+.tb { height: var(--topbar-h); flex: none; min-width: 0; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: var(--g1); border-bottom: var(--border); }
+.tb-brand { flex: none; display: flex; align-items: center; gap: 8px; min-width: calc(var(--sider-w) - 16px); text-decoration: none; color: inherit; }
+.tb-mark { width: 28px; height: 32px; flex: none; background: var(--mark); -webkit-mask: url('../assets/rengu-mark.png') center / contain no-repeat; mask: url('../assets/rengu-mark.png') center / contain no-repeat; }
+.tb-word { display: flex; flex-direction: column; min-width: 0; }
+.tb-cn { color: var(--g10); font-size: var(--fs-16); font-weight: var(--fw-strong); line-height: 20px; }
+.tb-en { color: var(--g8); font-size: var(--fs-12); line-height: 14px; letter-spacing: 0.01em; }
+.tb-chrome { flex: none; }
 .tb-workspace { display: flex; align-items: center; gap: 4px; flex: none; }
 .tb-workspace-select { width: 184px; }
-.tb-search { min-width: 120px; flex: 1; display: flex; justify-content: center; }
+.tb-search { min-width: 0; flex: 1; display: flex; justify-content: center; }
 .tb-ac { width: min(100%, 560px); }
 .tb-kbd { border: var(--border); border-radius: 2px; padding: 0 4px; line-height: 18px; }
-.tb-right { display: flex; align-items: center; gap: 8px; }
+.tb-right { display: flex; align-items: center; gap: 8px; flex: none; }
 .tb-icon { color: var(--g9); }
-.tb-user { display: flex; align-items: center; gap: 8px; cursor: pointer; padding-left: 8px; }
+.tb-user { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 0 4px 8px; border: 0; border-radius: 4px; color: inherit; background: transparent; font: inherit; }
+.tb-user:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.tb-user:disabled { cursor: wait; opacity: .65; }
 .tb-user-name { max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tb-avatar { background: var(--brand); }
-@media (max-width: 1400px) { .tb-tenant { width: 170px; } .tb-org-label { display: none; } .tb-workspace-select { width: 152px; } .tb { gap: 8px; } }
+@media (max-width: 1400px) { .tb-workspace-select { width: 152px; } .tb { gap: 8px; } }
+@media (max-width: 1000px) {
+  .tb { overflow-x: auto; }
+  .tb-search { min-width: 180px; }
+}
 .tb-help { min-width: 200px; }
 .tb-help-row { display: flex; justify-content: space-between; gap: 16px; white-space: nowrap; }
 </style>

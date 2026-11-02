@@ -29,6 +29,8 @@ const detail = computed({
 });
 const loading = ref(false);
 const sending = ref(false);
+/** 当前会话最近一次提问失败，保留到重试或切换会话，避免 toast 消失后空白。 */
+const sendError = ref('');
 /** W7 实时阶段提示（SSE status 事件的文案），发送结束清空 */
 const streamStatus = ref('');
 const listTick = ref(0);
@@ -62,9 +64,9 @@ if (real) {
   watch(contextKey, () => {
     ++loadSeq; ++sendSeq; ++createSeq; detailRequest?.abort();
     detail.value = null; activeId.value = ''; draft.value = ''; sessions.value = []; turns.value = {}; chartRequests.value = {}; listTick.value++; favTick.value++;
-    loading.value = false; sending.value = false; creating.value = false;
+    loading.value = false; sending.value = false; creating.value = false; sendError.value = '';
   }, { flush: 'sync' });
-  watch(activeId, () => { ++loadSeq; detailRequest?.abort(); loading.value = false; ++sendSeq; sending.value = false; draft.value = ''; }, { flush: 'sync' });
+  watch(activeId, () => { ++loadSeq; detailRequest?.abort(); loading.value = false; ++sendSeq; sending.value = false; draft.value = ''; sendError.value = ''; }, { flush: 'sync' });
   watch([activeId, live], ([id, on]) => {
     if (!on || !id || detail.value?.id !== id) void loadDetail(id);
   }, { immediate: true });
@@ -93,6 +95,7 @@ export function useQaSession() {
     const my = ++sendSeq;
     const valid = () => my === sendSeq && sid === activeId.value && key === contextKey();
     sending.value = true;
+    sendError.value = '';
     draft.value = '';
     try {
       // W7：先走 SSE（阶段提示实时更新），后台没有流 / 流断了没拿到 done → 回退 W6 同步接口
@@ -111,7 +114,7 @@ export function useQaSession() {
       listTick.value++;
       return true;
     } catch (e) {
-      if (valid()) { draft.value = q; message.error(`提问失败：${errText(e)}`); }
+      if (valid()) { draft.value = q; sendError.value = `提问失败：${errText(e)}`; message.error(sendError.value); }
       return false;
     } finally { if (valid()) { sending.value = false; streamStatus.value = ''; } }
   }
@@ -127,6 +130,7 @@ export function useQaSession() {
       delete requests[last.id];
       chartRequests.value = { ...requests, [last.id]: { type: chart[1] === '折线图' ? 'line' : 'bar' } };
       draft.value = '';
+      sendError.value = '';
       return true;
     }
     if (real) { void sendReal(q); return true; }
@@ -158,5 +162,5 @@ export function useQaSession() {
     draft.value = '';
     return id;
   }
-  return { streamStatus, sessions, activeId, turns, draft, isNew, activeTurns, send, newSession, real, live, detail, loading, sending, creating, listTick, favTick, loadDetail, newSessionReal };
+  return { streamStatus, sendError, sessions, activeId, turns, draft, isNew, activeTurns, send, newSession, real, live, detail, loading, sending, creating, listTick, favTick, loadDetail, newSessionReal };
 }

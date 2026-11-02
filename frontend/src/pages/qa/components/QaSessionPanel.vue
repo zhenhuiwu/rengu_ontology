@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 问数工作台左栏：新建会话、关键词搜索 + 时间筛选、历史会话（每页 10 条，simple 分页贴栏底）；常用问题、我的页面贴底。
+ * 问数工作台左栏：按工作台可用高度自动分页，支持固定条数；快捷入口依次排列，小窗口整栏滚动。
  * 翻页、搜索、筛选写在 URL：?sessPage=2&sessQ=库存&sessRange=7d
  * 悬停会话显示“…”菜单：重命名（行内编辑）、删除（Popconfirm 二次确认）。
  * “常用问题 · 管理”“我的页面 · 全部”不跳转，打开本页抽屉（?panel=favorites / ?panel=pages）。
@@ -15,6 +15,7 @@ import { qaFallBackIfDown } from '../qaFallback';
 import * as qaApi from '@/api/qa';
 import { currentApiContext } from '@/api/http';
 import AppPagination from '@/components/AppPagination.vue';
+import { useAdaptivePageSize } from '@/composables/useAdaptivePageSize';
 import { useQueryParam, useQueryPage } from '../useQueryParam';
 import { useReadonly } from '@/composables/useReadonly';
 import { usePreview } from '@/composables/usePreview';
@@ -23,10 +24,30 @@ import { useScopeCaliber } from '../qaScope';
 const { readonly, reason } = useReadonly();
 
 const emit = defineEmits<{ (e: 'panel', v: 'favorites' | 'pages'): void }>();
-const pageSize = ref(10);
-const listEl = ref<HTMLElement>();
+const panelEl = ref<HTMLElement>();
+const allocatedEl = computed(() => panelEl.value?.parentElement);
+const paging = useAdaptivePageSize({
+  container: allocatedEl, rowHeight: 30, rowSelector: '.qa-ss-list .qa-ss-item', min: 5, max: 50,
+  reserve: () => {
+    const panel = panelEl.value;
+    if (!panel) return 220;
+    const style = getComputedStyle(panel);
+    let reserved = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + 2;
+    for (const child of panel.children) {
+      if (child.classList.contains('qa-ss-list')) continue;
+      const css = getComputedStyle(child);
+      reserved += child.getBoundingClientRect().height + parseFloat(css.marginTop) + parseFloat(css.marginBottom);
+    }
+    // Reserve the same pager space while loading, before its count has arrived.
+    if (!panel.querySelector('.qa-ss-pager')) reserved += 84;
+    return reserved;
+  },
+  observe: () => [...(panelEl.value?.children ?? [])].filter(child => !child.classList.contains('qa-ss-list')),
+  onSizeChange: () => { page.value = 1; },
+});
+const pageSize = paging.size, pageMode = paging.mode;
 const { sessions: mockList, activeId: active, newSession, real, live, detail, listTick, favTick, newSessionReal, creating } = useQaSession();
-/* 真接口 W1 与本地分页固定每页 10 条。 */
+/* 自动和手动条数都进入真实列表请求；不按已返回行数反推容器容量。 */
 const contextKey = () => { const c = currentApiContext(); return JSON.stringify([c.ontologyId, c.demoAs, c.ver, c.previewAs]); };
 const filterKey = () => JSON.stringify([contextKey(), kw.value.trim(), range.value]);
 const listKey = () => JSON.stringify([filterKey(), page.value, pageSize.value]);
@@ -165,7 +186,7 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
 </script>
 
 <template>
-  <section class="panel qa-sessions">
+  <section ref="panelEl" class="panel qa-sessions">
     <a-tooltip :title="reason"><a-button block :disabled="readonly" :loading="creating" @click="onNew"><template #icon><PlusOutlined /></template>新建会话</a-button></a-tooltip>
     <div class="qa-ss-filter">
       <a-input :value="kw" placeholder="搜索会话" allow-clear @change="(e: Event) => (kw = (e.target as HTMLInputElement).value)">
@@ -173,20 +194,20 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
       </a-input>
       <a-select v-model:value="range" :options="RANGES" class="qa-ss-range" />
     </div>
-    <div class="qa-ss-head c-3"><span>历史会话</span><span v-if="total <= pageSize" class="t-12">共 {{ total }} 条</span></div>
-    <div ref="listEl" class="qa-ss-list">
+    <div class="qa-ss-head c-3"><span>历史会话</span><span v-if="!total" class="t-12">共 0 条</span></div>
+    <div class="qa-ss-list">
       <div v-for="s in rows" :key="s.id" class="qa-ss-item"
         :class="{ on: s.id === active, hold: menuId === s.id || delId === s.id, edit: editing === s.id }" :title="s.title" @click="select(s.id)">
         <a-input v-if="editing === s.id" ref="editInput" v-model:value="draft" size="small" class="qa-ss-edit"
           @press-enter="saveRename" @blur="saveRename" @keydown.esc="editing = ''" />
         <template v-else>
           <span class="qa-ss-title">{{ s.title }}</span>
-          <span class="t-12 c-3 num qa-ss-date">{{ when(s.date) }}</span>
+          <span class="t-12 c-3 num qa-ss-date" :title="s.date">{{ when(s.date) }}</span>
           <a-popconfirm :open="delId === s.id" title="删除这个会话？" description="删除后不可恢复，已固定到页面的卡片不受影响。"
             ok-text="删除" cancel-text="取消" :ok-button-props="{ danger: true }" placement="right"
             @confirm="doDelete(s.id)" @cancel="delId = ''" @open-change="(v: boolean) => { if (!v) delId = ''; }">
             <a-dropdown :trigger="['click']" :open="menuId === s.id" @open-change="(v: boolean) => (menuId = v ? s.id : '')">
-              <a-button type="text" size="small" class="qa-ss-more" title="更多" @click.stop><EllipsisOutlined /></a-button>
+              <a-button type="text" size="small" class="qa-ss-more" title="更多" :aria-label="`${s.title}的更多操作`" @click.stop><EllipsisOutlined /></a-button>
               <template #overlay>
                 <a-menu @click="({ key }: { key: string }) => onMenu(s.id, key)">
                   <a-menu-item key="rename">重命名</a-menu-item>
@@ -199,36 +220,42 @@ watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
       </div>
       <div v-if="!rows.length" class="qa-ss-empty c-3">没有匹配的会话</div>
     </div>
-    <div class="qa-ss-pager"><AppPagination v-if="total > pageSize" v-model:page="pageModel" variant="simple" :total="total" :size="pageSize" :empty="false" /></div>
-    <div class="qa-ss-bottom">
-      <div class="qa-ss-group c-3">常用问题<a @click="emit('panel', 'favorites')">管理</a></div>
-      <div v-for="s in favTop" :key="s" class="qa-ss-item"><span class="qa-ss-title">{{ s }}</span></div>
-      <div class="qa-ss-group c-3">我的页面<a @click="emit('panel', 'pages')">全部</a></div>
-      <div v-for="s in pageTop" :key="s" class="qa-ss-item"><span class="qa-ss-title">{{ s }}</span></div>
+    <div v-if="total" class="qa-ss-pager"><AppPagination v-model:page="pageModel" v-model:mode="pageMode" variant="simple" :total="total" :size="pageSize" :empty="false" /></div>
+    <div v-if="favTop.length || pageTop.length" class="qa-ss-bottom">
+      <template v-if="favTop.length">
+        <div class="qa-ss-group c-3">常用问题<a @click="emit('panel', 'favorites')">管理</a></div>
+        <div v-for="s in favTop" :key="s" class="qa-ss-item" :title="s"><span class="qa-ss-title">{{ s }}</span></div>
+      </template>
+      <template v-if="pageTop.length">
+        <div class="qa-ss-group c-3">我的页面<a @click="emit('panel', 'pages')">全部</a></div>
+        <div v-for="s in pageTop" :key="s" class="qa-ss-item" :title="s"><span class="qa-ss-title">{{ s }}</span></div>
+      </template>
     </div>
   </section>
 </template>
 
 <style scoped>
-.qa-sessions { width: 232px; flex: none; padding: 12px 8px; }
+.qa-sessions { width: 232px; min-height: 0; max-height: 100%; align-self: flex-start; flex: none; padding: 12px 8px; overflow-y: auto; overflow-x: hidden; }
 .qa-ss-filter { display: flex; gap: 4px; margin: 8px 0 4px; }
 .qa-ss-filter :deep(.ant-input-affix-wrapper) { flex: 1; min-width: 0; }
 .qa-ss-range { width: 96px; flex: none; }
 .qa-ss-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 8px 4px; }
-.qa-ss-list { flex: 1; min-height: 0; overflow: hidden; }
-.qa-sessions > :not(.qa-ss-list) { flex-shrink: 0; }
+.qa-sessions > * { flex-shrink: 0; }
+.qa-ss-list { flex: none; min-width: 0; }
 .qa-ss-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--radius); cursor: pointer; }
+.qa-ss-list .qa-ss-item { display: grid; grid-template-columns: minmax(0, 1fr) 48px; }
 .qa-ss-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qa-ss-date { grid-area: 1 / 2; text-align: right; white-space: nowrap; }
 .qa-ss-item:hover { background: var(--g3); }
 .qa-ss-item.on { background: var(--brand-bg); color: var(--brand); }
 .qa-ss-item.edit { padding: 2px 4px; }
-.qa-ss-edit { flex: 1; }
-/* “…”只在悬停（或菜单/确认打开）时出现，占用日期的位置，不改变行高 */
-.qa-ss-more { display: none; width: 24px; height: 22px; padding: 0; flex: none; }
-.qa-ss-item:hover .qa-ss-more, .qa-ss-item.hold .qa-ss-more { display: inline-flex; align-items: center; justify-content: center; }
-.qa-ss-item:hover .qa-ss-date, .qa-ss-item.hold .qa-ss-date { display: none; }
+.qa-ss-edit { grid-column: 1 / -1; min-width: 0; }
+/* 菜单和日期共用固定格，悬停、键盘聚焦或菜单打开时不挤动标题。 */
+.qa-ss-more { grid-area: 1 / 2; justify-self: end; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px; padding: 0; opacity: 0; pointer-events: none; }
+.qa-ss-item:hover .qa-ss-more, .qa-ss-item.hold .qa-ss-more, .qa-ss-item:focus-within .qa-ss-more { opacity: 1; pointer-events: auto; }
+.qa-ss-item:hover .qa-ss-date, .qa-ss-item.hold .qa-ss-date, .qa-ss-item:focus-within .qa-ss-date { opacity: 0; }
 .qa-ss-empty { padding: 16px 8px; text-align: center; }
-.qa-ss-pager { padding: 0 8px; height: 40px; }
+.qa-ss-pager { padding: 4px 8px 0; }
 .qa-ss-group { display: flex; justify-content: space-between; padding: 8px 8px 4px; }
 .qa-ss-bottom { flex: none; border-top: var(--border); padding-top: 4px; }
 </style>

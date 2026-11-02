@@ -4,24 +4,29 @@
  * EChart。首页只看不改：订单动作（补发出库单）在订单抽屉里，用 ConfirmActionModal 确认。整页无滚动，表格分页。
  */
 import { message } from 'ant-design-vue';
-import { computed, reactive, ref, shallowRef, watch } from 'vue';
+import { fitColumns } from '@/tableColumns';
+import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue';
 import ObjRef from '@/components/ObjRef.vue';
 import HoverCard from '@/components/HoverCard.vue';
 import EChart from '@/components/EChart.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import InfoTip from '@/components/InfoTip.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
+import { useDebouncedRef } from '@/composables/useDebouncedRef';
 import { useRoute, useRouter } from 'vue-router';
 import { GRAY } from '@/theme';
-import {
-  ORDERS, STORES, METRICS, DAILY_GMV_EX, exTax, storeById, paginate, fmtMoney, fmtInt, fmtPct, fmtDelta, type Order,
-} from '@/mock';
+import { fmtMoney, fmtInt, fmtPct, fmtDelta } from '@/mock/format';
+import { paginate } from '@/mock/paginate';
+import type { Order } from '@/mock/orders';
 import { fetchKpis, fetchStoreRanking, fetchSalesDaily, isDashboardReal, type KpiMetric, type StoreRank } from '@/api/dashboard';
 import { currentApiContext, isBackendDown } from '@/api/http';
 import { listOrderDtos } from '@/api/biz';
 
 const route = useRoute();
 const router = useRouter();
+const demo = shallowRef<typeof import('@/mock') | null>(null);
+if (!isDashboardReal()) void import('@/mock').then((data) => { demo.value = data; });
+const storeById = (id: string) => demo.value?.storeById(id);
 
 const MOCK_AS_OF = '2026-10-24 23:00';
 const contextKey = () => JSON.stringify(currentApiContext());
@@ -33,7 +38,7 @@ const dataAsOf = computed(() => !isDashboardReal() ? MOCK_AS_OF
 
 const KPI_IDS = ['gmv', 'order_cnt', 'gross_margin', 'ship_ontime'];
 // mock 模式现算；真接口（开关 biz）时用 GET /api/biz/v1/dashboard/kpis 的结果替换（值同 mock METRICS）
-const demoKpis = () => KPI_IDS.map((id) => METRICS.find((x) => x.id === id)!);
+const demoKpis = () => KPI_IDS.flatMap((id) => { const metric = demo.value?.METRICS.find((x) => x.id === id); return metric ? [metric] : []; });
 const kpiMetrics = shallowRef<KpiMetric[]>(isDashboardReal() ? [] : demoKpis());
 const homeErrors = reactive({ kpi: '', orders: '', rank: '' });
 const kpis = computed(() => kpiMetrics.value.map((m) => {
@@ -47,16 +52,17 @@ const kpis = computed(() => kpiMetrics.value.map((m) => {
 const status = ref<string>('全部');
 const channel = ref<string>('全部');
 const kw = ref('');
+const searchKw = useDebouncedRef(kw);
 // 分页：一屏 15 行（1920×1080），页码/条数同步到 URL，筛选变化回到第 1 页
-const pq = usePagedQuery({ defaultSize: 15, filters: [status, channel, kw] });
+const pq = usePagedQuery({ defaultSize: 15, filters: [status, channel, searchKw] });
 // 与页头“数据截至 2026-10-24 23:00”一致：首页只用截至该时刻的订单（样本订单里有 10 月 25 日的实时单，首页不展示）
 const CUTOFF = '2026-10-24 23:00:59';
-const CUT_ORDERS = ORDERS.filter((o) => o.createdAt <= CUTOFF);
+const CUT_ORDERS = computed(() => demo.value?.ORDERS.filter((o) => o.createdAt <= CUTOFF) ?? []);
 const rows = computed(() =>
-  CUT_ORDERS.filter((o) =>
+  CUT_ORDERS.value.filter((o) =>
     (status.value === '全部' || o.status === status.value) &&
     (channel.value === '全部' || o.channel === channel.value) &&
-    (!kw.value || o.id.includes(kw.value) || (storeById(o.storeId)?.name ?? '').includes(kw.value)),
+    (!searchKw.value || o.id.includes(searchKw.value) || (storeById(o.storeId)?.name ?? '').includes(searchKw.value)),
   ),
 );
 const mockPaged = computed(() => paginate(rows.value, { page: pq.page.value, size: pq.size.value }));
@@ -66,39 +72,50 @@ const realOrders = shallowRef<{ items: HomeOrderRow[]; total: number } | null>(n
 const paged = computed<{ items: HomeOrderRow[]; total: number }>(() =>
   isDashboardReal() ? realOrders.value ?? { items: [], total: 0 } : { items: mockPaged.value.items.map((o) => ({ ...o, lineCnt: o.lines.length })), total: mockPaged.value.total });
 let ordersSeq = 0;
+let ordersRequest: AbortController | undefined;
+let ordersContext = '';
+const ordersLoading = ref(false);
 async function loadOrders() {
   const seq = ++ordersSeq;
   const context = contextKey();
-  cutoffs.orders = '';
+  ordersRequest?.abort();
+  if (ordersContext !== context) { ordersContext = context; realOrders.value = null; cutoffs.orders = ''; }
   homeErrors.orders = '';
-  realOrders.value = null;
-  if (!isDashboardReal()) return;
+  if (!isDashboardReal()) { ordersLoading.value = false; return; }
+  ordersRequest = new AbortController();
+  ordersLoading.value = true;
   try {
     const r = await listOrderDtos({
       status: status.value === '全部' ? undefined : (status.value as Order['status']),
       channel: channel.value === '全部' ? undefined : channel.value,
-      kw: kw.value || undefined, page: pq.page.value, size: pq.size.value,
-    });
+      kw: searchKw.value.trim() || undefined, page: pq.page.value, size: pq.size.value,
+    }, ordersRequest.signal);
     if (seq !== ordersSeq || context !== contextKey()) return;
     cutoffs.orders = r.dataAsOf ?? '';
     realOrders.value = {
       total: r.total,
       items: r.items.map((o) => ({ id: o.id, storeId: o.storeId, storeName: o.storeName, channel: o.channel, amount: o.amount, status: o.status, createdAt: o.createdAt, lineCnt: o.lineCount ?? 0 })),
     };
-  } catch (e) { if (seq === ordersSeq && context === contextKey()) { realOrders.value = null; homeErrors.orders = errorText(e); } }
+  } catch (e) { if (seq === ordersSeq && context === contextKey() && (e as Error)?.name !== 'AbortError') { realOrders.value = null; cutoffs.orders = ''; homeErrors.orders = errorText(e); } }
+  finally { if (seq === ordersSeq) ordersLoading.value = false; }
 }
-watch([status, channel, kw, pq.page, pq.size], () => { void loadOrders(); });
+watch([contextKey, status, channel, searchKw, pq.page, pq.size], (next, previous) => {
+  const filterChanged = previous?.length && next.slice(1, 4).some((value, i) => value !== previous[i + 1]);
+  // The filter reset is one router.replace; wait for page=1 instead of fetching the old page first.
+  if (filterChanged && next[0] === previous[0] && pq.page.value !== 1) { ++ordersSeq; ordersRequest?.abort(); return; }
+  void loadOrders();
+}, { immediate: true });
 const statusBadge = (s: Order['status']) =>
   s === '待支付' ? 'warning' : 'default'; // 状态不用蓝/绿：正常流转都是灰色，待支付需要关注为橙色
-const columns = [
+const columns = fitColumns([
   { title: '订单号', dataIndex: 'id', key: 'id', width: 200 },
-  { title: '门店', key: 'store', ellipsis: true },
+  { title: '门店', key: 'store', width: 180, ellipsis: true },
   { title: '渠道', dataIndex: 'channel', key: 'channel', width: 112 },
   { title: '商品数', key: 'lines', width: 76, align: 'right' as const },
   { title: '实付金额（元）', key: 'amount', width: 132, align: 'right' as const },
   { title: '状态', key: 'status', width: 96 },
   { title: '下单时间', dataIndex: 'createdAt', key: 'createdAt', width: 172 },
-];
+]);
 
 // 真实模式按数据库订单实付聚合；演示曲线只在显式 mock 模式使用。
 const trend = reactive<{ key: string; loading: boolean; error: string; items: { date: string; value: number }[]; dataAsOf: string }>({ key: '', loading: false, error: '', items: [], dataAsOf: '' });
@@ -116,7 +133,7 @@ async function loadTrend() {
   } catch (e) { if (seq === trendSeq && context === contextKey()) trend.error = errorText(e); }
   finally { if (seq === trendSeq && context === contextKey()) trend.loading = false; }
 }
-const trendPoints = computed(() => isDashboardReal() ? trend.key === contextKey() ? trend.items : [] : DAILY_GMV_EX);
+const trendPoints = computed(() => isDashboardReal() ? trend.key === contextKey() ? trend.items : [] : demo.value?.DAILY_GMV_EX ?? []);
 const trendOption = computed(() => ({
   grid: { left: 56, right: 16, top: 16, bottom: 28 },
   tooltip: { trigger: 'axis', valueFormatter: (v: number) => fmtMoney(v) },
@@ -133,49 +150,57 @@ const trendOption = computed(() => ({
 }));
 
 // 门店排行（按样本订单实付金额汇总）
-const fullRanking = STORES.map((s) => {
-  const os = CUT_ORDERS.filter((o) => o.storeId === s.id);
+const fullRanking = computed(() => (demo.value?.STORES ?? []).map((s) => {
+  const os = CUT_ORDERS.value.filter((o) => o.storeId === s.id);
   // 销售额（不含税）= 实付金额 ÷ (1 + 13%)，与指标 gmv 同口径
-  return { id: s.id, name: s.name, city: s.city, cnt: os.length, amount: exTax(os.reduce((a, o) => a + o.amount, 0)) };
-}).sort((a, b) => b.amount - a.amount).map((r, i) => ({ ...r, rank: i + 1 }));
+  return { id: s.id, name: s.name, city: s.city, cnt: os.length, amount: demo.value!.exTax(os.reduce((a, o) => a + o.amount, 0)) };
+}).sort((a, b) => b.amount - a.amount).map((r, i) => ({ ...r, rank: i + 1 })));
 // 真接口（开关 biz）时排行改读 GET /api/biz/v1/stores/ranking（服务端分页，口径同上）；失败显示错误和空数据
-const rankTotal = ref(isDashboardReal() ? 0 : fullRanking.length);
-const ranking = shallowRef<StoreRank[]>(isDashboardReal() ? [] : fullRanking.slice(0, 10));
+const rankTotal = ref(isDashboardReal() ? 0 : fullRanking.value.length);
+const ranking = shallowRef<StoreRank[]>(isDashboardReal() ? [] : fullRanking.value.slice(0, 10));
 // “全部”：抽屉里看完整排行（?rank=all，可截图复现），simple 分页
 const rankOpen = computed(() => route.query.rank === 'all');
 const setRankOpen = (v: boolean) => router.push({ query: { ...route.query, rank: v ? 'all' : undefined } });
 const RANK_SIZE = 10;
 const rankPage = ref(1);
-const rankPaged = shallowRef<{ items: StoreRank[]; total: number }>(isDashboardReal() ? { items: [], total: 0 } : paginate(fullRanking, { page: 1, size: RANK_SIZE }));
+const rankPaged = shallowRef<{ items: StoreRank[]; total: number }>(isDashboardReal() ? { items: [], total: 0 } : paginate(fullRanking.value, { page: 1, size: RANK_SIZE }));
 const errorText = (e: unknown) => isBackendDown(e) ? '后台不可达' : e instanceof Error ? e.message : String(e);
 let rankSeq = 0;
+let rankRequest: AbortController | undefined;
+const rankLoading = ref(false);
+const rankError = ref('');
 async function loadRankPage(page: number) {
   const seq = ++rankSeq;
   const context = contextKey();
-  if (!isDashboardReal()) { rankPaged.value = paginate(fullRanking, { page, size: RANK_SIZE }); return; }
+  rankRequest?.abort();
+  rankError.value = '';
+  if (!isDashboardReal()) { rankPaged.value = paginate(fullRanking.value, { page, size: RANK_SIZE }); return; }
+  rankRequest = new AbortController();
+  rankLoading.value = true;
   try {
-    const r = await fetchStoreRanking({ page, size: RANK_SIZE });
+    const r = await fetchStoreRanking({ page, size: RANK_SIZE }, rankRequest.signal);
     if (seq !== rankSeq || context !== contextKey()) return;
     rankPaged.value = r;
     rankTotal.value = r.total;
-  } catch (e) { if (seq !== rankSeq || context !== contextKey()) return; homeErrors.rank = errorText(e); rankPaged.value = { items: [], total: 0 }; }
+  } catch (e) { if (seq !== rankSeq || context !== contextKey() || (e as Error)?.name === 'AbortError') return; rankError.value = errorText(e); rankPaged.value = { items: [], total: 0 }; }
+  finally { if (seq === rankSeq) rankLoading.value = false; }
 }
-watch(rankPage, (p) => { void loadRankPage(p); });
+watch([rankPage, rankOpen], ([page, open]) => { if (open) void loadRankPage(page); });
 let summarySeq = 0;
 async function loadSummary() {
   const seq = ++summarySeq;
   const context = contextKey();
+  ++rankSeq; rankRequest?.abort(); rankLoading.value = false; rankError.value = '';
   cutoffContext.value = context;
   Object.assign(cutoffs, { kpi: '', rank: '', orders: '' });
   Object.assign(homeErrors, { kpi: '', orders: '', rank: '' });
   kpiMetrics.value = isDashboardReal() ? [] : demoKpis();
-  ranking.value = isDashboardReal() ? [] : fullRanking.slice(0, 10);
-  rankTotal.value = isDashboardReal() ? 0 : fullRanking.length;
-  rankPaged.value = isDashboardReal() ? { items: [], total: 0 } : paginate(fullRanking, { page: rankPage.value, size: RANK_SIZE });
+  ranking.value = isDashboardReal() ? [] : fullRanking.value.slice(0, 10);
+  rankTotal.value = isDashboardReal() ? 0 : fullRanking.value.length;
+  rankPaged.value = isDashboardReal() ? { items: [], total: 0 } : paginate(fullRanking.value, { page: rankPage.value, size: RANK_SIZE });
   realOrders.value = null;
   if (!isDashboardReal()) return;
-  void loadOrders();
-  void loadRankPage(rankPage.value);
+  if (rankOpen.value && rankPage.value !== 1) void loadRankPage(rankPage.value);
   await Promise.all([
     (async () => {
       try {
@@ -190,21 +215,23 @@ async function loadSummary() {
         const r = await fetchStoreRanking({ page: 1, size: 10 });
         if (seq !== summarySeq || context !== contextKey()) return;
         ranking.value = r.items;
+        if (rankPage.value === 1) rankPaged.value = r;
         rankTotal.value = r.total;
         cutoffs.rank = r.dataAsOf;
       } catch (e) { if (seq === summarySeq && context === contextKey()) homeErrors.rank = errorText(e); }
     })(),
   ]);
 }
-watch(contextKey, loadSummary, { immediate: true });
+watch([contextKey, demo], loadSummary, { immediate: true });
 watch(contextKey, loadTrend, { immediate: true });
+onBeforeUnmount(() => { ++ordersSeq; ++summarySeq; ++rankSeq; ++trendSeq; ordersRequest?.abort(); rankRequest?.abort(); });
 
-const rankCols = [
+const rankCols = fitColumns([
   { title: '#', key: 'idx', width: 40 },
-  { title: '门店', key: 'name', ellipsis: true },
+  { title: '门店', key: 'name', width: 180, ellipsis: true },
   { title: '订单数', key: 'cnt', width: 80, align: 'right' as const },
   { title: '销售额（元）', key: 'amount', width: 132, align: 'right' as const },
-];
+]);
 
 function onExport({ key }: { key: string | number }) {
   message.success(`已开始导出 ${key}：10 月 1 日—24 日，完成后可在下载中心获取`);
@@ -252,7 +279,7 @@ function onExport({ key }: { key: string | number }) {
         </div>
         <div v-if="homeErrors.orders" role="alert">订单加载失败：{{ homeErrors.orders }}</div>
         <div class="orders-table paged-scroll">
-          <a-table size="small" row-key="id" :columns="columns" :data-source="paged.items" :pagination="false">
+          <a-table size="small" row-key="id" :columns="columns" :data-source="paged.items" :loading="ordersLoading" :pagination="false">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'id'"><ObjRef kind="order" :id="record.id"><span class="num">{{ record.id }}</span></ObjRef></template>
               <template v-else-if="column.key === 'store'"><ObjRef kind="store" :id="record.storeId">{{ record.storeName ?? (isDashboardReal() ? record.storeId : storeById(record.storeId)?.name) }}</ObjRef></template>
@@ -297,7 +324,8 @@ function onExport({ key }: { key: string | number }) {
 
   <a-drawer :open="rankOpen" :width="640" @close="setRankOpen(false)">
     <template #title>门店销售额排行（不含税）· 全部 {{ rankTotal }} 家<InfoTip :text="`销售额（不含税）= 实付金额 ÷ 1.13 · 数据截至 ${dataAsOf}`" /></template>
-    <a-table size="small" row-key="id" :pagination="false" :data-source="rankPaged.items" :columns="rankCols">
+    <a-alert v-if="rankError" type="error" show-icon :message="rankError"><template #action><a-button size="small" @click="loadRankPage(rankPage)">重试</a-button></template></a-alert>
+    <a-table size="small" row-key="id" :pagination="false" :data-source="rankPaged.items" :columns="rankCols" :loading="rankLoading">
       <template #bodyCell="{ column, record }">
         <span v-if="column.key === 'idx'" class="num c-3">{{ record.rank }}</span>
         <ObjRef v-else-if="column.key === 'name'" kind="store" :id="record.id">{{ record.name }}</ObjRef>

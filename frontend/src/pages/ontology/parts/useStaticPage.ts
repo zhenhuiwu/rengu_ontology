@@ -16,7 +16,6 @@ export function useStaticPage<T>(path: () => string, query: () => Query, page: R
     if (!isStaticReal() || !enabled() || !path()) { loading.value = false; return; }
     request = new AbortController();
     loading.value = true; error.value = '';
-    result.value = { ...result.value, items: [] };
     const valid = () => !disposed && n === seq && captured === key();
     try {
       const data = await fetchStaticPage<T>(path(), { ...query(), page: page.value, size: take() }, request.signal);
@@ -24,7 +23,10 @@ export function useStaticPage<T>(path: () => string, query: () => Query, page: R
       result.value = data;
       if (data.page !== page.value) page.value = data.page;
     } catch (e) {
-      if (valid() && (e as Error)?.name !== 'AbortError') error.value = e instanceof Error ? e.message : String(e);
+      if (valid() && (e as Error)?.name !== 'AbortError') {
+        result.value = { items: [], total: 0, page: page.value, size: take() };
+        error.value = e instanceof Error ? e.message : String(e);
+      }
     } finally { if (n === seq) loading.value = false; }
   }
   watch(() => JSON.stringify([staticContextKey(), path()]), () => { ++seq; request?.abort(); result.value = { items: [], total: 0, page: 1, size: take() }; error.value = ''; loading.value = false; }, { flush: 'sync' });

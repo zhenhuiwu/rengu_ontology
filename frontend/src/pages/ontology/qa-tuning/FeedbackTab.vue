@@ -12,6 +12,7 @@
 import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import { fitColumns } from '@/tableColumns';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
@@ -86,18 +87,18 @@ const isRemote = (f: Fb): f is QaFeedback => 'certBlock' in f;
 onBeforeUnmount(() => { ++listSeq; ++detailSeq; });
 const paged = computed<Rows<Fb>>(() => (live.value ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
 
-const cols = [
+const cols = fitColumns([
   { title: '编号', key: 'id', width: 76 },
   { title: '时间', key: 'time', width: 110 },
   { title: '用户', key: 'user', width: 72 },
   { title: '部门', key: 'dept', width: 110, ellipsis: true },
   { title: '问题', key: 'question', width: 200, ellipsis: true },
-  { title: '回答', key: 'answer', ellipsis: true },
+  { title: '回答', key: 'answer', width: 200, ellipsis: true },
   { title: '用户说明', key: 'reason', width: 190, ellipsis: true },
   { title: '建议修正', key: 'fix', width: 260, ellipsis: true },
   { title: '状态', key: 'status', width: 190 },
   { title: '操作', key: 'op', width: 150 },
-];
+]);
 const stCls = (s: FbStatus) => (s === '待处理' ? 'tl-normal' : s === '已忽略' || s === '待发布生效' ? 'c-3' : 'c-2');
 /** 修正已在“已通过、待整版发布”的变更单里 */
 const awaitingRelease = (cr?: string) => !!cr && crById(cr)?.status === '已通过';

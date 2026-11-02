@@ -35,6 +35,7 @@ export interface AlertDto extends Omit<Alert, 'storeId' | 'storeLabel'> {
   objKindLabel: string; dims: AlertDim[];
   assigneeId?: string | null; canClose: boolean; canClaim: boolean; assignedToMe: boolean;
   actionRef?: string | null; actionStatus?: string | null; actionId?: string | null;
+  actionOutcome?: string | null; actionReason?: string | null; actionExtRef?: string | null;
 }
 export interface AlertRuleDto { id: string; name: string; version: string; trigger: string | { kind?: string; text?: string; eventId?: string }; condition?: string; expr?: string; conds?: { expr?: string; field?: string; op?: string; value?: unknown }[]; logic?: string; schedule: string; dedupe: string; action?: string; metric?: string; confirmer?: string }
 export interface AlertCan { claim: boolean; transfer: boolean; close: boolean; startAction: boolean; reasons: Record<string, string> }
@@ -270,12 +271,12 @@ export function crErrText(e: unknown): string {
   if (!isApiError(e)) return e instanceof Error ? e.message : String(e);
   const d = (e.details ?? {}) as Record<string, unknown>;
   switch (e.code) {
-    case 'CR_EMPTY': return '变更单里还没有改动，先保存到草稿再提交审核';
+    case 'CR_EMPTY': return '没有新改动，修改后再保存';
     case 'CR_BLOCKED': {
       const b = Array.isArray(d.blocked) ? (d.blocked as unknown[]).map((x) => (typeof x === 'string' ? x : (x as { name?: string; id?: string }).name ?? (x as { id?: string }).id ?? '')).filter(Boolean) : [];
-      return `合并校验有阻断项，不能提交审核${b.length ? `：${b.join('、')}` : ''}`;
+      return `合并校验有阻断项，无法保存并生效或发布${b.length ? `：${b.join('、')}` : ''}`;
     }
-    case 'CR_NO_REVIEWER': return '变更单还没有指定审核人，请先在“变更与发布”里指定审核人';
+    case 'CR_NO_REVIEWER': return '此变更单仍受历史流程约束，无法直接发布；请核查当前发布配置';
     case 'CR_LOCKED': return `变更单当前是“${String(d.status ?? '非草稿')}”，只有草稿状态才能修改`;
     case 'VERSION_CONFLICT':
       if (typeof d.id === 'string') delete LOCKS[d.id];

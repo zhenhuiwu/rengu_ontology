@@ -44,6 +44,6 @@ export async function getOrder(id: string): Promise<Order & { storeName: string 
 }
 
 /** 首页订单表用：原样返回后台列表项（带 storeName、lineCount），不转成前端 Order */
-export function listOrderDtos(q: OrderQuery = {}): Promise<PageResult<OrderDto> & { dataAsOf?: string }> {
-  return api.get<PageResult<OrderDto> & { dataAsOf?: string }>('/orders', { query: { ...q } });
+export function listOrderDtos(q: OrderQuery = {}, signal?: AbortSignal): Promise<PageResult<OrderDto> & { dataAsOf?: string }> {
+  return api.get<PageResult<OrderDto> & { dataAsOf?: string }>('/orders', { query: { ...q }, signal });
 }

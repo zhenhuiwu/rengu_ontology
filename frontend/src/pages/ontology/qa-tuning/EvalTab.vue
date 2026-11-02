@@ -9,6 +9,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AppPagination from '@/components/AppPagination.vue';
 import { message } from 'ant-design-vue';
+import { fitColumns } from '@/tableColumns';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { currentApiContext, type PageResult } from '@/api/http';
 import { qaReal, qaRequestOptions, listEvalRuns, getEvalRun, listEvalQuestions, type QaEvalRun, type QaEvalRunDetail, type QaEvalQList, type QaEvalQ } from '@/api/qa';
@@ -37,7 +38,7 @@ const TRIGGERS = ['每日定时', '手动运行', '发布前回放', '发布后�
 const runs = computed(() => tuning.runs.filter((r) => !trigF.value || r.trigger.includes(trigF.value)));
 const rq = usePagedQuery({ defaultSize: 15, filters: [trigF], prefix: 'e' });
 type Run = EvalRun | QaEvalRun;
-const rcols = [
+const rcols = fitColumns([
   { title: '编号', key: 'id', width: 90 },
   { title: '时间', key: 'time', width: 140 },
   { title: '触发', key: 'trigger', width: 300 },
@@ -48,8 +49,8 @@ const rcols = [
   { title: '失败', key: 'fails', width: 70, align: 'right' },
   { title: '状态', key: 'status', width: 110 },
   { title: '执行人', dataIndex: 'operator', key: 'operator', width: 80 },
-  { title: '说明', key: 'note', ellipsis: true },
-];
+  { title: '说明', key: 'note', width: 180, ellipsis: true },
+]);
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
 const rate = (r: { total: number; passed: number }) => (r.total ? r.passed / r.total : 0);
 const failN = (r: Run) => ('failCount' in r ? r.failCount : r.fails.length);
@@ -61,14 +62,14 @@ const ekw = computed({ get: () => q('ekw'), set: (v: string) => setQuery({ ekw: 
 const qs = computed(() => EVAL_QS.filter((x) => (!gF.value || x.group === gF.value) && (!resF.value || x.last === resF.value) && (!ekw.value || x.question.includes(ekw.value))));
 const qq = usePagedQuery({ defaultSize: 15, filters: [gF, resF, ekw], prefix: 'q' });
 
-const qcols = [
+const qcols = fitColumns([
   { title: '编号', key: 'id', width: 80 },
   { title: '题目', key: 'question', width: 260, ellipsis: true },
   { title: '分组', key: 'group', width: 90 },
-  { title: '期望语义计划', key: 'expect', ellipsis: true },
+  { title: '期望语义计划', key: 'expect', width: 220, ellipsis: true },
   { title: '关联变更', key: 'cr', width: 150 },
   { title: '最近结果', key: 'last', width: 90 },
-];
+]);
 
 /* 抽屉 */
 const FSIZE = 12;

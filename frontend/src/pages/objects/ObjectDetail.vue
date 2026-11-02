@@ -206,8 +206,8 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
     <div class="panel od-head">
       <a class="od-back t-12" @click="goBack"><LeftOutlined /> {{ backLabel }}</a>
       <div class="od-title">
-        <span class="t-20 fw-600">{{ row.title }}</span>
-        <a-tag class="od-kind">{{ meta.name }}</a-tag>
+        <span class="t-20 fw-600 od-name" :title="row.title">{{ row.title }}</span>
+        <a-tag class="od-kind">{{ meta.name }}</a-tag><a-tag v-if="got?.mirrorCompleteness === 'partial'">部分同步</a-tag>
         <span v-if="currentApiContext().ver" class="c-3 t-12" title="按该版本定义查询当前数据">当前实例</span>
         <span class="od-brief od-ell" :title="prominent.map((p) => `${p.name} ${val(p)}`).join('　')">
           <span v-for="p in prominent" :key="p.key"><span class="c-2">{{ p.name }}</span> <span class="num">{{ val(p) }}</span></span>
@@ -300,7 +300,8 @@ function ask(q = '') { askInitial.value = q; askOpen.value = true; }
 .od-missing { height: 100%; justify-content: center; }
 .od-head { padding: 12px 16px; gap: 4px; flex: none; }
 .od-back { align-self: flex-start; }
-.od-title { display: flex; align-items: center; gap: 12px; }
+.od-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.od-name { flex: 0 1 auto; min-width: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .od-kind { margin: 0; }
 .od-cut { margin-left: auto; }
 .od-brief { flex: 0 1 auto; min-width: 0; white-space: nowrap; }

@@ -1,20 +1,27 @@
 <script setup lang="ts">
 /** Approved definition forms. All writes are CR sections; no runtime metrics or arbitrary SQL. */
 import { computed, reactive, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
-import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
+import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { currentApiContext } from '@/api/http';
+import { listDatasources, listDsTables } from '@/api/datasources';
+import type { Datasource, DsTable } from '@/mock/datasources';
 import { definitionChoices, definitionDetail, definitionProperties, definitionContext, saveDefinition, type DefinitionKind, type DefinitionValues, type DefinitionProperty, type DefinitionOption } from '@/api/definitionForms';
 import { fetchCR, fetchCRItems, fetchCurrentAfterWrite, isStaticReal } from '@/api/static';
 import { draftFields, draftRows } from './useStaticCr';
-import AppPagination from '@/components/AppPagination.vue';
 const props = defineProps<{ kind: DefinitionKind; targetId?: string; crId?: string; newTarget?: boolean; assistantDraft?: Record<string, unknown> }>();
 const open = defineModel<boolean>('open', { default: false });
 const emit = defineEmits<{ saved: [result: { id: string; crId: string; published?: boolean }] }>();
 const { readonly, reason } = useReadonly();
+const router = useRouter();
 const confirm = useConfirmStore();
+const sources = ref<Datasource[]>([]);
+const catalogTables = ref<DsTable[]>([]);
+const sourcesError = ref(''), catalogError = ref('');
+let catalogSeq = 0;
 const kindName = computed(() => ({ object: '对象类型', metric: '指标', dimension: '维度与字典' })[props.kind]);
 const opts = ref<{ join?: string; title?: string; desc?: string }>();
 const visible = computed(() => open.value);
@@ -29,9 +36,14 @@ const defaultRangeMode = computed({ get: () => defaultRange.value == null ? 'non
   set: (mode: string) => { values.defaultRange = mode === 'none' ? null : { kind: 'rolling_days' }; } });
 const defaultRangeDays = computed({ get: () => defaultRange.value?.days,
   set: (days: number | null | undefined) => { values.defaultRange = { kind: 'rolling_days', ...(days == null ? {} : { days }) }; } });
-let lockedProperties = new WeakSet<object>();
+let lockedProperties = new WeakMap<object, string>();
 const previousProperties = ref<DefinitionProperty[]>([]);
-const propertyPage = ref(1);
+const openProp = ref<number | null>(null);
+const propTypeOptions = [
+  ['string', '文本'], ['int', '整数'], ['integer', '整数'], ['decimal', '小数'], ['boolean', '是否'],
+  ['timestamp', '时间'], ['date', '日期'], ['enum', '枚举'], ['json', 'JSON'], ['long_text', '长文本'],
+].map(([value, label]) => ({ value, label: `${label} ${value}` }));
+const visibilityOptions = [{ value: 'prominent', label: '突出' }, { value: 'normal', label: '普通' }, { value: 'hidden', label: '隐藏' }];
 const properties = ref<DefinitionProperty[]>([]), sourceProperties = ref<DefinitionProperty[]>([]);
 const choices = reactive<{ owners: DefinitionOption[]; objects: DefinitionOption[]; metrics: DefinitionOption[]; dimensions: DefinitionOption[]; metricGroups: string[] }>({ owners: [], objects: [], metrics: [], dimensions: [], metricGroups: [] });
 interface Level { name: string; api: string; source: string; note?: string }
@@ -52,9 +64,10 @@ async function load() {
   if (!visible.value) return;
   if (!isStaticReal()) { error.value = '定义表单仅用于真实接口模式'; loading.value = false; return; }
   loading.value = true; error.value = ''; assistantSourceHint.value = ''; lockVersion.value = undefined; choices.metricGroups = []; sourceProperties.value = []; initialSnapshot.value = '';
+  sources.value = []; catalogTables.value = []; sourcesError.value = ''; catalogError.value = ''; catalogSeq++;
   const defaults: DefinitionValues = { name: '', api: props.targetId ?? '', group: '', owner: '', domain: '', desc: '', conflict: '用户编辑优先', source: '', table: '', pk: '', sync: '', unit: '', version: 'v1', formula: '', timeField: '', defaultFilter: '', defaultRange: null, dims: [], kind: '维度', object: '', attr: '', column: '', valueSrc: '', levels: [], variants: [] };
   Object.keys(values).forEach((k) => delete values[k]); Object.assign(values, defaults);
-  properties.value = []; propertyPage.value = 1; variants.value = []; levels.value = []; original.value = undefined; originalProperties.value = [];
+  properties.value = []; openProp.value = null; variants.value = []; levels.value = []; original.value = undefined; originalProperties.value = [];
   try {
     const version = await fetchCurrentAfterWrite();
     const options = await definitionChoices(props.kind);
@@ -79,7 +92,7 @@ async function load() {
     }
     if (props.targetId) resumeApi.value = values.api;
     previousProperties.value = properties.value.map((p) => ({ ...p }));
-    lockedProperties = new WeakSet(properties.value);
+    lockedProperties = new WeakMap(properties.value.map((p) => [p, p.api]));
     if (!choices.owners.some((o) => o.id === values.owner)) {
       const matching = choices.owners.filter((o) => o.name === values.owner);
       if (matching.length === 1) values.owner = matching[0].id;
@@ -87,6 +100,15 @@ async function load() {
     variants.value = ((values.variants ?? []) as Variant[]).map((v) => ({ ...v }));
     levels.value = ((values.levels ?? []) as Level[]).map(({ name, api, source, note }) => ({ name, api, source, note }));
     previousLevels.value = levels.value.map((l) => ({ ...l }));
+    if (props.kind === 'object') {
+      try { sources.value = await listDatasources(); }
+      catch (e) { sources.value = []; sourcesError.value = e instanceof Error ? e.message : String(e); }
+      if (my !== seq || key !== contextKey()) return;
+      values.source = matchSource(String(values.source ?? ''), sources.value);
+      await loadCatalog(String(values.source ?? ''));
+      if (my !== seq || key !== contextKey()) return;
+      values.table = matchTable(String(values.table ?? ''), catalogTables.value);
+    }
     initialSnapshot.value = formSignature();
     if (!props.targetId && props.assistantDraft) {
       const draft = props.assistantDraft;
@@ -130,7 +152,60 @@ async function loadSourceProperties() {
   }
   catch (e) { if (my === sourceSeq && key === contextKey() && visible.value) sourceError.value = `来源属性加载失败：${e instanceof Error ? e.message : String(e)}`; }
 }
+function matchSource(raw: string, rows: Datasource[]) {
+  const text = raw.trim();
+  if (!text || rows.some((s) => s.id === text)) return text;
+  const named = rows.filter((s) => s.name === text);
+  return named.length === 1 ? named[0].id : text;
+}
+function matchTable(raw: string, rows: DsTable[]) {
+  const text = raw.trim();
+  if (!text) return '';
+  const exact = rows.find((t) => `${t.schema}.${t.name}` === text);
+  if (exact) return `${exact.schema}.${exact.name}`;
+  if (!text.includes('.')) {
+    const named = rows.filter((t) => t.name === text);
+    if (named.length === 1) return `${named[0].schema}.${named[0].name}`;
+    const pub = named.find((t) => t.schema === 'public');
+    if (pub) return `public.${pub.name}`;
+  }
+  return text;
+}
+async function loadCatalog(id: string) {
+  const my = ++catalogSeq;
+  catalogTables.value = []; catalogError.value = '';
+  if (!sources.value.some((s) => s.id === id)) return;
+  try {
+    const rows = await listDsTables(id);
+    if (my !== catalogSeq) return;
+    catalogTables.value = rows;
+  } catch (e) { if (my === catalogSeq) catalogError.value = e instanceof Error ? e.message : String(e); }
+}
+async function pickSource(id?: string) {
+  values.table = '';
+  await loadCatalog(String(id ?? ''));
+}
+async function openConnection() {
+  if (dirty.value && !await confirmDiscard()) return;
+  const id = sources.value.some((s) => s.id === values.source) ? String(values.source) : undefined;
+  open.value = false;
+  await router.push({ path: '/build/data/connections', query: { ...router.currentRoute.value.query, ...(id ? { ds: id } : {}) } });
+}
 watch(() => values.object, loadSourceProperties);
+const sourceOptions = computed(() => {
+  const options = sources.value.map((s) => ({ value: s.id, label: `${s.name} · ${s.type}` }));
+  const current = String(values.source ?? '');
+  if (current && !options.some((o) => o.value === current)) options.unshift({ value: current, label: current });
+  return options;
+});
+const tableOptions = computed(() => {
+  const options = catalogTables.value.map((t) => ({ value: `${t.schema}.${t.name}`, label: t.comment ? `${t.schema}.${t.name} · ${t.comment}` : `${t.schema}.${t.name}` }));
+  const current = String(values.table ?? '');
+  if (current && !options.some((o) => o.value === current)) options.unshift({ value: current, label: current });
+  return options;
+});
+const sourceUnmatched = computed(() => { const current = String(values.source ?? ''); return !!current && !sources.value.some((s) => s.id === current); });
+const tableUnmatched = computed(() => { const current = String(values.table ?? ''); return !!current && !catalogTables.value.some((t) => `${t.schema}.${t.name}` === current); });
 watch(contextKey, () => { if (open.value) { open.value = false; message.info('身份或版本已切换，请重新打开定义表单'); } });
 const metricGroupOptions = computed(() => choices.metricGroups.map(value => ({ value })));
 const ownerOptions = computed(() => choices.owners.map((o) => ({ value: o.id, label: o.name })));
@@ -146,7 +221,7 @@ const validation = computed(() => {
   const existing = props.kind === 'object' ? choices.objects : props.kind === 'metric' ? choices.metrics : choices.dimensions;
   if (!props.targetId && existing.some((item) => item.api === values.api || item.id === values.api)) return 'API名已存在，请使用新的API名';
   if (props.kind === 'object') {
-    if (properties.value.some((p) => !p.api.trim() || !p.name.trim() || !/^[a-z][a-z0-9_]*$/.test(p.api))) return '属性名称必填，属性API需小写字母开头，仅含字母、数字和下划线';
+    if (properties.value.some((p) => !p.api.trim() || !p.name.trim() || (!/^[a-z][a-z0-9_]*$/.test(p.api) && !(lockedProperties.get(p) === p.api && originalProperties.value.some((original) => original.api === p.api))))) return '属性名称必填，新增属性API需小写字母开头，仅含字母、数字和下划线';
     if (new Set(properties.value.map((p) => p.api)).size !== properties.value.length) return '属性API名不能重复';
     if (values.pk && !properties.value.some((p) => p.api === values.pk)) return '主键须引用当前属性';
     if (properties.value.filter((p) => p.title).length > 1) return '标题属性只能有一个';
@@ -173,7 +248,22 @@ const validation = computed(() => {
 });
 const canSave = computed(() => isStaticReal() && !readonly.value && !loading.value && !busy.value && !error.value && !sourceError.value && !validation.value);
 function isExistingProperty(p: DefinitionProperty) { return lockedProperties.has(p); }
-function addProperty() { properties.value.push({ api: '', name: '', type: 'string', group: '其他', source: '', desc: '', visibility: 'normal', searchable: false, filterable: false, sortable: false, listed: true }); propertyPage.value = Math.ceil(properties.value.length/4); }
+function addProperty() {
+  properties.value.push({ api: '', name: '', type: 'string', group: '其他', source: '', desc: '', visibility: 'normal', searchable: false, filterable: false, sortable: false, listed: true });
+  openProp.value = properties.value.length - 1;
+}
+function removeProperty(index: number) {
+  if (values.pk === properties.value[index]?.api) values.pk = '';
+  properties.value.splice(index, 1);
+  if (openProp.value === index) openProp.value = null;
+  else if (openProp.value != null && openProp.value > index) openProp.value -= 1;
+}
+function propMarks(p: DefinitionProperty) {
+  return [values.pk === p.api && p.api ? '主键' : '', p.title ? '标题' : '', p.sensitive ? '敏感' : '', p.visibility === 'hidden' ? '隐藏' : ''].filter((mark) => mark !== '');
+}
+function setPrimary(p: DefinitionProperty, checked: boolean) {
+  values.pk = checked && p.api ? p.api : values.pk === p.api ? '' : values.pk;
+}
 function changeAttr(value: string) { const p = sourceProperties.value.find((p) => p.api === value); values.column = p?.source ?? ''; }
 function setDefault(index: number) { variants.value.forEach((v, i) => v.default = i === index); }
 function moveLevel(index: number, by: number) { const other = index + by; if (other < 0 || other >= levels.value.length) return; [levels.value[index], levels.value[other]] = [levels.value[other], levels.value[index]]; }
@@ -183,7 +273,7 @@ async function save() {
   const key = contextKey(), my = seq; busy.value = true;
   try {
     const removed = props.kind === 'object' ? previousProperties.value.filter((p) => !properties.value.some((v) => v.api === p.api)).map((p) => p.name) : props.kind === 'dimension' ? previousLevels.value.filter((l) => !levels.value.some((v) => v.api === l.api)).map((l) => l.name) : [];
-    if (removed.length && !await confirm.ask({ title: '确认从定义草稿中移除', target: values.name, fields: [{ label: '移除条目', value: removed.join('、') }], impact: '改动先保存到草稿，发布后生效；已发布定义在发布前保持可用。', okText: '保存移除改动', danger: true })) return;
+    if (removed.length && !await confirm.ask({ title: '确认从定义中移除', target: values.name, fields: [{ label: '移除条目', value: removed.join('、') }], impact: '保存后立即生效，后续查询和操作将使用更新后的定义。', okText: '保存移除改动', danger: true })) return;
     if (my !== seq || key !== contextKey() || readonly.value) return;
     const payload = { ...values, levels: levels.value.map(({ name, api, source, note }) => ({ name, api, source, note })), variants: variants.value.map((v) => ({ code: v.code, label: v.label.trim(), default: v.default })) };
     const rows = properties.value.map((p) => ({ ...p, pk: p.api === values.pk ? true : p.pk ? false : undefined, ...(p.visibility === 'hidden' ? { filterable: false, sortable: false, listed: false } : {}), ...(p.sensitive ? { filterable: false } : {}), ...(p.type === 'long_text' ? { filterable: false, sortable: false } : {}) }));
@@ -212,31 +302,67 @@ async function save() {
           <div class="definition-grid">
             <a-form-item label="业务域"><a-input v-model:value="values.domain" :maxlength="64" /></a-form-item>
             <a-form-item label="冲突策略"><a-select v-model:value="values.conflict" :options="['用户编辑优先','源系统优先'].map((v) => ({ value: v }))" /></a-form-item>
-            <a-form-item label="数据连接"><a-input v-model:value="values.source" placeholder="数据连接编号" /></a-form-item>
-            <a-form-item label="源表"><a-input v-model:value="values.table" placeholder="schema.表名" /></a-form-item>
-            <a-form-item label="主键属性"><a-select v-model:value="values.pk" allow-clear :options="properties.filter((p) => p.api).map((p) => ({ value: p.api, label: p.name || p.api }))" /></a-form-item>
-            <a-form-item label="同步说明"><a-input v-model:value="values.sync" :maxlength="128" /></a-form-item>
+            <a-form-item label="数据连接" extra="按名称选择已有连接，不必填写编号。这里只记录来源。">
+              <a-select v-model:value="values.source" show-search allow-clear option-filter-prop="label" :options="sourceOptions" placeholder="选择数据连接" @change="pickSource" />
+              <div v-if="sourcesError" class="t-12 c-3">连接列表加载失败：{{ sourcesError }}</div>
+              <div v-else-if="sourceUnmatched" class="t-12 c-3">这条来源没有对应到现有连接，请从列表重新选择。</div>
+            </a-form-item>
+            <a-form-item label="源表" extra="从该连接已经读取到的库表中选择。">
+              <a-select v-model:value="values.table" show-search allow-clear option-filter-prop="label" :options="tableOptions" :disabled="!values.source" placeholder="选择源表" />
+              <div v-if="tableUnmatched && !catalogError" class="t-12 c-3">这条源表不在当前连接的库表目录里，保存时会原样保留。</div>
+              <div v-if="sources.some((s) => s.id === values.source) && !catalogTables.length && !catalogError" class="t-12 c-3">还没有库表目录。<a-button type="link" size="small" @click="openConnection">去数据连接刷新</a-button></div>
+              <div v-if="catalogError" class="t-12 c-3">库表加载失败：{{ catalogError }}</div>
+            </a-form-item>
+            <a-form-item label="主键属性" extra="先在下方添加属性，再选择其中一个。"><a-select v-model:value="values.pk" allow-clear :options="properties.filter((p) => p.api).map((p) => ({ value: p.api, label: p.name || p.api }))" placeholder="选择主键属性" /></a-form-item>
+            <a-form-item label="同步说明" extra="只是说明，不会按这里自动执行。"><a-input v-model:value="values.sync" :maxlength="128" placeholder="例如：每天凌晨全量" /></a-form-item>
           </div>
           <a-form-item label="说明"><a-textarea v-model:value="values.desc" :rows="2" /></a-form-item>
           <div class="definition-heading"><span class="t-14 fw-600">属性</span><a-button size="small" @click="addProperty">新增属性</a-button></div>
-          <div v-for="(p, localIndex) in properties.slice((propertyPage-1)*4,propertyPage*4)" :key="(propertyPage-1)*4+localIndex" class="definition-row">
-            <div class="definition-grid">
-              <a-form-item label="名称"><a-input v-model:value="p.name" :maxlength="64" /></a-form-item><a-form-item label="API名"><a-input v-model:value="p.api" :maxlength="64" :disabled="isExistingProperty(p)" /></a-form-item>
-              <a-form-item label="类型"><a-select v-model:value="p.type" :options="['string','int','integer','decimal','boolean','timestamp','date','enum','json','long_text'].map((v) => ({ value: v }))" /></a-form-item><a-form-item label="来源列"><a-input v-model:value="p.source" :maxlength="256" /></a-form-item>
-              <a-form-item label="分组"><a-input v-model:value="p.group" :maxlength="32" /></a-form-item><a-form-item label="枚举字典"><a-input v-model:value="p.enumName" :maxlength="64" :disabled="p.type !== 'enum'" /></a-form-item>
+          <p v-if="!properties.length" class="t-12 c-3">还没有属性。新增后只需填写名称、类型和来源列，其余放到「设置」里。</p>
+          <div v-else class="prop-sheet">
+            <div class="prop-head t-12 c-3"><span>名称</span><span>API 名</span><span>类型</span><span>来源列</span><span></span></div>
+            <div v-for="(p, index) in properties" :key="index" class="prop-block" :class="{ open: openProp === index }">
+              <div class="prop-line">
+                <a-input v-model:value="p.name" :maxlength="64" placeholder="名称" />
+                <a-input v-model:value="p.api" :maxlength="64" placeholder="api_name" :disabled="isExistingProperty(p)" />
+                <a-select v-model:value="p.type" :options="propTypeOptions" />
+                <a-input v-model:value="p.source" :maxlength="256" placeholder="源列" />
+                <div class="prop-actions">
+                  <a-button type="link" size="small" @click="openProp = openProp === index ? null : index">{{ openProp === index ? '收起' : '设置' }}</a-button>
+                  <a-button type="link" size="small" danger @click="removeProperty(index)">移除</a-button>
+                </div>
+              </div>
+              <div v-if="openProp !== index && propMarks(p).length" class="prop-markline t-12 c-3">{{ propMarks(p).join(' ') }}</div>
+              <div v-if="openProp === index" class="prop-more">
+                <div class="prop-more-grid">
+                  <label class="t-12 c-3">分组<a-input v-model:value="p.group" :maxlength="32" /></label>
+                  <label v-if="p.type === 'enum'" class="t-12 c-3">枚举字典<a-input v-model:value="p.enumName" :maxlength="64" /></label>
+                  <label class="t-12 c-3">展示<a-select v-model:value="p.visibility" :options="visibilityOptions" /></label>
+                  <label class="t-12 c-3">排序<a-input-number v-model:value="p.order" :min="0" :precision="0" /></label>
+                  <label class="t-12 c-3">列宽<a-input-number v-model:value="p.listWidth" :min="1" :precision="0" /></label>
+                  <label class="t-12 c-3">格式<a-input v-model:value="p.format" :maxlength="32" /></label>
+                  <label class="t-12 c-3">单位<a-input v-model:value="p.unit" :maxlength="16" /></label>
+                </div>
+                <a-input v-model:value="p.desc" placeholder="属性说明，没有可以留空" />
+                <div class="prop-flags">
+                  <a-checkbox :checked="!!p.api && values.pk === p.api" :disabled="!p.api" @change="setPrimary(p, $event.target.checked)">主键</a-checkbox>
+                  <a-checkbox v-model:checked="p.title">标题</a-checkbox>
+                  <a-checkbox v-model:checked="p.dim">可分组</a-checkbox>
+                  <a-checkbox v-model:checked="p.sensitive">敏感</a-checkbox>
+                  <a-checkbox v-model:checked="p.searchable">可搜索</a-checkbox>
+                  <a-checkbox v-model:checked="p.filterable" :disabled="p.visibility === 'hidden' || p.sensitive || p.type === 'long_text'">可筛选</a-checkbox>
+                  <a-checkbox v-model:checked="p.sortable" :disabled="p.visibility === 'hidden' || p.type === 'long_text'">可排序</a-checkbox>
+                  <a-checkbox v-model:checked="p.listed" :disabled="p.visibility === 'hidden'">列表显示</a-checkbox>
+                </div>
+              </div>
             </div>
-            <div class="definition-grid"><a-form-item label="展示层级"><a-select v-model:value="p.visibility" :options="[{ value: 'prominent', label: '突出' }, { value: 'normal', label: '普通' }, { value: 'hidden', label: '隐藏' }]" /></a-form-item><a-form-item label="排序序号"><a-input-number v-model:value="p.order" :min="0" :precision="0" /></a-form-item><a-form-item label="列表列宽"><a-input-number v-model:value="p.listWidth" :min="1" :precision="0" /></a-form-item><a-form-item label="显示格式 / 单位"><a-space><a-input v-model:value="p.format" :maxlength="32" placeholder="格式" /><a-input v-model:value="p.unit" :maxlength="16" placeholder="单位" /></a-space></a-form-item></div>
-            <a-input v-model:value="p.desc" placeholder="属性说明" /><a-space class="definition-flags"><a-checkbox v-model:checked="p.title">标题</a-checkbox><a-checkbox v-model:checked="p.dim">可分组</a-checkbox><a-checkbox v-model:checked="p.sensitive">敏感</a-checkbox><a-checkbox v-model:checked="p.searchable">可搜索</a-checkbox><a-checkbox v-model:checked="p.filterable" :disabled="p.visibility === 'hidden' || p.sensitive || p.type === 'long_text'">可筛选</a-checkbox><a-checkbox v-model:checked="p.sortable" :disabled="p.visibility === 'hidden' || p.type === 'long_text'">可排序</a-checkbox><a-checkbox v-model:checked="p.listed" :disabled="p.visibility === 'hidden'">列表显示</a-checkbox><a-button size="small" @click="properties.splice((propertyPage-1)*4+localIndex, 1); propertyPage = Math.max(1, Math.min(propertyPage, Math.ceil(properties.length/4)))">移除属性</a-button></a-space>
           </div>
-          <AppPagination v-model:page="propertyPage" :total="properties.length" :size="4" variant="simple" />
-          <a-alert type="info" message="此处只保存定义草稿；源表未加入受控映射时不提供业务查询，不自动授予SQL权限。" />
         </template>
         <template v-else-if="kind === 'metric'">
           <div class="definition-grid"><a-form-item label="单位"><a-input v-model:value="values.unit" :maxlength="16" /></a-form-item><a-form-item label="口径版本"><a-input v-model:value="values.version" :maxlength="16" /></a-form-item></div>
           <a-form-item label="公式（口径定义）"><a-textarea v-model:value="values.formula" :rows="3" placeholder="填写指标计算公式" /></a-form-item>
-          <div class="definition-grid"><a-form-item label="时间字段" extra="试算按此字段取时间范围；格式 对象API.属性API"><a-input v-model:value="values.timeField" :maxlength="256" placeholder="对象API.属性API" allow-clear /></a-form-item><a-form-item label="默认过滤" extra="问题里没写时自动加上；多个条件用；分隔"><a-input v-model:value="values.defaultFilter" :maxlength="256" placeholder="对象API.属性API = 值" allow-clear /></a-form-item></div>
+          <div class="definition-grid"><a-form-item label="时间字段" extra="时间范围使用此字段；格式 对象API.属性API"><a-input v-model:value="values.timeField" :maxlength="256" placeholder="对象API.属性API" allow-clear /></a-form-item><a-form-item label="默认过滤" extra="问题里没写时自动加上；多个条件用；分隔"><a-input v-model:value="values.defaultFilter" :maxlength="256" placeholder="对象API.属性API = 值" allow-clear /></a-form-item></div>
           <div class="definition-grid"><a-form-item label="缺少时间时" extra="发布后，提问未指定时间时使用；未设置则追问"><a-select v-model:value="defaultRangeMode" :options="[{ value: 'none', label: '未设置' }, { value: 'rolling_days', label: '最近若干天（含今天）' }]" /></a-form-item><a-form-item v-if="defaultRangeMode === 'rolling_days'" label="天数" required><a-input-number v-model:value="defaultRangeDays" :min="1" :max="93" :precision="0" placeholder="填写天数" /></a-form-item></div>
-          <a-alert v-if="props.targetId" type="info" message="是否可试算以「草稿试算」检查为准：保存后在指标页查看就绪原因。" />
           <a-form-item label="允许维度"><a-select v-model:value="values.dims" mode="multiple" :options="dimensionOptions" /></a-form-item>
           <div class="definition-heading"><span class="t-14 fw-600">口径变体</span><a-button size="small" :disabled="variants.length >= 32" @click="variants.push({ code: '', label: '', default: !variants.length })">新增变体</a-button></div>
           <div v-for="(v, i) in variants" :key="i" class="definition-variant"><a-select v-model:value="v.code" :options="metricOptions" placeholder="已发布指标" /><a-input v-model:value="v.label" placeholder="口径标签" :maxlength="64" /><span class="t-12 c-3">{{ variantTarget(v.code)?.api ?? '—' }} · {{ variantTarget(v.code)?.version ?? '—' }}</span><a-radio :checked="v.default" @change="setDefault(i)">默认</a-radio><a-button size="small" @click="variants.splice(i, 1)">移除</a-button></div>
@@ -261,7 +387,20 @@ async function save() {
 .definition-heading, .definition-footer, .definition-flags { display: flex; align-items: center; gap: 12px; }
 .definition-heading { justify-content: space-between; margin: 16px 0 12px; }
 .definition-row { border: 1px solid var(--g5); padding: 12px; margin-bottom: 12px; border-radius: 4px; }
-.definition-flags { margin-top: 12px; flex-wrap: wrap; }
+.prop-sheet { border: var(--border); border-radius: var(--radius); }
+.prop-head, .prop-line { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.15fr) 148px minmax(0, 1fr) 132px; gap: 8px; align-items: center; }
+.prop-head > *, .prop-line > * { min-width: 0; }
+.prop-head { padding: 8px 12px; background: var(--g3); border-bottom: var(--border); }
+.prop-line { padding: 8px 12px; }
+.prop-block + .prop-block { border-top: var(--border); }
+.prop-block.open { background: var(--g2); }
+.prop-actions { display: flex; align-items: center; justify-content: flex-end; }
+.prop-markline { padding: 0 12px 8px; }
+.prop-more { display: grid; gap: 8px; padding: 0 12px 12px; }
+.prop-more-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 12px; }
+.prop-more-grid label { display: grid; gap: 4px; }
+.prop-flags { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.prop-sheet :deep(.ant-select), .prop-sheet :deep(.ant-input-number) { width: 100%; }
 .definition-variant { display: grid; grid-template-columns: 240px 180px 1fr auto auto; gap: 8px; align-items: center; margin-bottom: 12px; }
 .definition-footer > span { flex: 1; }
 .definition-row .definition-grid { row-gap: 12px; margin-bottom: 12px; }

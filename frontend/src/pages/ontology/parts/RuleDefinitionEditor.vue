@@ -134,7 +134,7 @@ const triggerEnabled = computed(() => props.rule.trigger.kind === '事件' ? pro
     <a-alert v-if="error && !dialog.open" type="error" :message="error" show-icon />
     <a-form layout="vertical" class="rule-settings">
       <a-form-item label="对象类型"><a-select :value="rule.objKind" :options="objects" :disabled="!editable" show-search option-filter-prop="label" @change="(v: any) => emit('update', {objKind:v})" /></a-form-item>
-      <a-form-item label="去重键"><a-input :value="rule.dedupe" :disabled="!editable" :maxlength="200" placeholder="如：规则 + 订单" @update:value="(v: string) => emit('update', {dedupe:v})" /></a-form-item>
+      <a-form-item label="去重键" extra="去重按规则版本隔离。循环业务需将已有轮次字段纳入键，并为每次入站事件使用独立 eventId。"><a-input :value="rule.dedupe" :disabled="!editable" :maxlength="200" placeholder="如：规则 + 订单" @update:value="(v: string) => emit('update', {dedupe:v})" /></a-form-item>
       <a-form-item label="冷却时间"><a-input :value="rule.cooldown" :disabled="!editable" :maxlength="64" placeholder="如：24 小时 或 不重复" @update:value="(v: string) => emit('update', {cooldown:v})" /></a-form-item>
     </a-form>
   </div>
@@ -158,7 +158,7 @@ const triggerEnabled = computed(() => props.rule.trigger.kind === '事件' ? pro
   <a-modal v-model:open="dialog.open" :title="dialog.index < 0 ? '添加条件' : '编辑条件'" ok-text="采用条件" cancel-text="取消" :width="580" @ok="saveCondition">
     <a-alert v-if="error" type="error" :message="error" show-icon class="condition-error" />
     <a-form layout="vertical">
-      <a-form-item label="取值来源"><a-select v-model:value="dialog.source" :options="[{value:'object',label:'对象属性'},{value:'event',label:'事件载荷',disabled:rule.trigger.kind !== '事件'},{value:'metric',label:'指标口径'},{value:'function',label:'固定版本函数'},{value:'relation',label:'关联对象属性'}]" @change="dialog.field = ''; dialog.metric = ''; dialog.version = undefined" /></a-form-item>
+      <a-form-item label="取值来源" extra="对象及关联字段在执行时读取当前值；事件载荷保留入站事实，不还原历史对象值。"><a-select v-model:value="dialog.source" :options="[{value:'object',label:'对象当前属性'},{value:'event',label:'事件入站载荷',disabled:rule.trigger.kind !== '事件'},{value:'metric',label:'指标口径'},{value:'function',label:'固定版本函数'},{value:'relation',label:'关联对象当前属性'}]" @change="dialog.field = ''; dialog.metric = ''; dialog.version = undefined" /></a-form-item>
       <template v-if="dialog.source === 'metric'">
         <a-form-item label="指标" required><a-select :value="dialog.metric || undefined" :options="metrics" show-search option-filter-prop="label" placeholder="选择已发布指标" @change="(v: any) => selectMetric(v)" /></a-form-item>
         <a-form-item label="口径版本" required><a-select v-model:value="dialog.version" :options="versions" placeholder="明确选择版本" /></a-form-item>

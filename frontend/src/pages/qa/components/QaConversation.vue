@@ -18,10 +18,10 @@ import type { QaDynamicAnswer } from '@/api/qa';
 import type { QaRealTurn, QaChainAnswer, QaClarifyAnswer, QaActionAnswer, QaAlertRef, QaActionSuggest, QaActionRun } from '@/api/qa';
 import { pinTitle } from '@/api/qaPages';
 /** applied：越权那一轮已提交申请；tips：本会话中途修改范围/口径后插入的系统提示（追加在最新一轮之后） */
-const props = defineProps<{ applied: boolean; tips: string[]; actionRuns: Record<string, QaActionRun> }>();
+const props = defineProps<{ applied: boolean; tips: string[]; actionRuns: Record<string, QaActionRun>; actionIssues: Record<string, string>; actionBusy: boolean }>();
 /** pin：真接口时带这一轮的 id 和问题（固定到页面 P7 用） */
 const emit = defineEmits<{ (e: 'suggest', action?: QaActionSuggest, turnId?: string): void; (e: 'refresh-action', turnId: string): void; (e: 'pin', turn?: { id: string; title: string }): void; (e: 'apply', turnId?: string): void }>();
-const { isNew, activeTurns, activeId, draft, live, detail, sending, loading, send, streamStatus } = useQaSession();
+const { isNew, activeTurns, activeId, draft, live, detail, sending, loading, send, streamStatus, sendError } = useQaSession();
 const { readonly, reason } = useReadonly();
 /** 示例会话的轮次（mock/qa.ts）；新追加的轮次统一用 QA_DEMO_CANNED */
 const TURNS = computed<QaRealTurn[]>(() => (live.value ? detail.value?.turns ?? [] : activeId.value ? QA_DEMO_TURNS : []));
@@ -139,18 +139,19 @@ watch(chartRequests, async (requests) => { const ids = Object.keys(requests); co
       </div>
     </template>
     <template v-else-if="isAction(t)">
-      <div class="qa-b qa-b-ans">
+      <div class="qa-b qa-b-ans qa-action">
         <ApartmentOutlined class="qa-b-av" />
         <span class="qa-b-txt">{{ t.answer.text }}</span>
         <a-tag :color="t.answer.action.dryRun.passed ? 'green' : 'orange'">{{ t.answer.action.dryRun.passed ? '校验通过' : '校验未通过' }}</a-tag>
-        <a-tag v-if="actionRuns[t.id]" :color="actionRuns[t.id].status === '成功' ? 'green' : undefined">{{ actionRuns[t.id].status }} · {{ actionRuns[t.id].id }}</a-tag>
+        <a-tag v-if="actionRuns[t.id]" :color="actionIssues[t.id] ? 'orange' : actionRuns[t.id].status === '成功' ? 'green' : undefined"><template v-if="actionIssues[t.id]">关联记录（不代表本次动作）：</template>{{ actionRuns[t.id].status }} · {{ actionRuns[t.id].id }}</a-tag>
         <a-tag v-else-if="t.answer.action.runId">记录 {{ t.answer.action.runId }} · 状态待查询</a-tag>
         <span v-if="actionRuns[t.id]?.status === '失败' && actionRuns[t.id]?.failReason" class="t-12 c-3">{{ actionRuns[t.id]?.failReason }}</span>
         <span v-if="actionRuns[t.id]?.status === '结果未知' && actionRuns[t.id]?.unknownReason" class="t-12 c-3">{{ actionRuns[t.id]?.unknownReason }}</span>
-        <span v-if="actionRuns[t.id]?.status === '已对账'" class="t-12 c-3">{{ actionRuns[t.id]?.reconcile }}<template v-if="actionRuns[t.id]?.extRef"> · 外部单号 {{ actionRuns[t.id]?.extRef }}</template></span>
-        <a-button v-if="actionRuns[t.id] && ['执行中', '待审批', '结果未知'].includes(actionRuns[t.id].status)" size="small" @click="emit('refresh-action', t.id)">刷新状态</a-button>
+        <span v-if="actionRuns[t.id]?.status === '已对账'" class="t-12 c-3">{{ actionRuns[t.id]?.reconcile }}<template v-if="actionRuns[t.id]?.reconcile === '外部未执行' && actionRuns[t.id]?.failReason"> · 原因 {{ actionRuns[t.id]?.failReason }}</template><template v-if="actionRuns[t.id]?.extRef"> · 外部单号 {{ actionRuns[t.id]?.extRef }}</template></span>
+        <span v-if="actionIssues[t.id]" class="t-12 qa-action-issue">{{ actionIssues[t.id] }} 原记录：{{ actionRuns[t.id]?.action }} · {{ actionRuns[t.id]?.objId }} · {{ actionRuns[t.id]?.paramsUnavailable ? '参数不可用' : actionRuns[t.id]?.params || '无参数' }} · 告警 {{ actionRuns[t.id]?.alertId === undefined ? '未提供' : actionRuns[t.id]?.alertId || '无' }}</span>
+        <a-button v-if="actionRuns[t.id] && (actionIssues[t.id] || ['执行中', '审批中', '结果未知'].includes(actionRuns[t.id].status))" size="small" @click="emit('refresh-action', t.id)">刷新状态</a-button>
         <span v-if="live && !t.answer.action.runId && t.answer.action.stageVersion !== 1" class="t-12 c-3">历史动作卡无法确认是否已执行，请重新提问后发起。</span>
-        <a-tooltip v-else-if="t.answer.action.canStage !== false && (!actionRuns[t.id] || actionRuns[t.id].status === '待确认')" :title="reason || '在当前页面确认目标和参数后执行'"><a-button size="small" :disabled="readonly" @click="emit('suggest', t.answer.action, t.id)">{{ t.answer.action.runId && !actionRuns[t.id] ? '查看状态' : '确认并执行' }}</a-button></a-tooltip>
+        <a-tooltip v-else-if="t.answer.action.canStage !== false && (!actionRuns[t.id] || actionRuns[t.id].status === '待确认')" :title="reason || actionIssues[t.id] || actionRuns[t.id]?.can?.reasons?.confirm || (t.answer.action.dryRun.passed === false ? '动作校验未通过，请核对条件后重新提问' : '在当前页面确认目标和参数后执行')"><a-button size="small" :disabled="readonly || actionBusy || !!actionIssues[t.id] || actionRuns[t.id]?.can?.confirm === false || (t.answer.action.dryRun.passed === false && (!t.answer.action.runId || !!actionRuns[t.id]))" @click="emit('suggest', t.answer.action, t.id)">{{ t.answer.action.runId && !actionRuns[t.id] ? '查看状态' : '确认并执行' }}</a-button></a-tooltip>
         <a-tag v-else-if="t.answer.action.canStage === false">仅建议</a-tag>
       </div>
       <ActionReviewPanel v-bind="t.answer.action.dryRun" />
@@ -188,6 +189,7 @@ watch(chartRequests, async (requests) => { const ids = Object.keys(requests); co
     <div v-for="(t, i) in tips" :key="i" class="qa-sys t-12 c-3"><span>{{ t }}</span></div>
     </template>
     <div v-if="live && sending" class="qa-b qa-b-ans"><ApartmentOutlined class="qa-b-av" /><span class="qa-b-txt c-3">{{ streamStatus || '正在查询…' }}</span><a-spin size="small" /></div>
+    <div v-if="live && sendError" class="qa-b" role="alert"><span class="qa-b-txt">{{ sendError }}。原问题已保留在输入框，可修改后重新发送。</span></div>
     <template v-for="t in activeTurns" :key="t.id">
       <div class="qa-u"><span class="t-12 c-3">{{ t.time }}</span><span class="qa-bubble">{{ t.q }}</span><a-avatar size="small" class="qa-me">{{ me }}</a-avatar></div>
       <div class="qa-b qa-b-ans">
@@ -208,6 +210,8 @@ watch(chartRequests, async (requests) => { const ids = Object.keys(requests); co
 .qa-me { background: var(--brand); flex: none; }
 .qa-b { display: flex; align-items: center; gap: 8px; background: var(--g1); border: var(--border); border-radius: var(--radius); padding: 6px 16px; margin: 0 40px 10px 0; }
 .qa-b-txt { flex: 1; }
+.qa-action { flex-wrap: wrap; }
+.qa-action-issue { flex-basis: 100%; overflow-wrap: anywhere; }
 .qa-b :deep(.ant-tag) { margin-inline-end: 0; }
 .qa-b-av { color: var(--brand); }
 .qa-b-meta { flex: none; white-space: nowrap; }

@@ -4,7 +4,7 @@ import { actionContextKey, getEventDeliveries, type EventDeliveryStatus } from '
 import AppPagination from './AppPagination.vue';
 import ObjRef from './ObjRef.vue';
 import DeliveryReview from './DeliveryReview.vue';
-import { deliveryLabels } from './deliveryPresentation';
+import { deliveryErrorLabels, deliveryLabels } from './deliveryPresentation';
 
 const props = defineProps<{ eventId: string }>();
 const rows = ref<EventDeliveryStatus | null>(null);
@@ -64,12 +64,15 @@ const total = computed(() => rows.value?.total ?? 0);
         <a-list-item>
           <div class="delivery-row">
             <div class="delivery-title"><span class="fw-500">{{ item.name }}</span><a-tag :color="['failed', 'quarantined'].includes(item.state) ? 'error' : ['pending', 'unknown'].includes(item.state) ? 'warning' : 'default'">{{ status(item) }}</a-tag></div>
-            <div v-if="item.error" class="t-12 c-2">{{ reasons[item.error] ?? (item.state === 'pending' ? '暂未满足投递条件' : '请核查投递详情') }}</div>
+            <div v-if="item.error" class="t-12 c-2">{{ item.errorMessage ?? deliveryErrorLabels[item.error] ?? reasons[item.error] ?? (item.state === 'pending' ? '暂未满足投递条件' : '请核查投递详情') }}</div>
             <a-button size="small" type="link" @click="selected = item.id">核查与处置</a-button>
             <a-collapse ghost>
               <a-collapse-panel key="receipt" header="投递详情">
                 <a-descriptions :column="1" size="small">
                   <a-descriptions-item label="实际尝试">{{ item.attempts }} 次</a-descriptions-item>
+                  <a-descriptions-item v-if="item.typeVersion" label="事件定义版本">{{ item.typeVersion }}</a-descriptions-item>
+                  <a-descriptions-item v-if="item.ontologyVersion" label="本体版本">{{ item.ontologyVersion }}</a-descriptions-item>
+                  <a-descriptions-item v-if="item.subscriptionFilter" label="入站订阅过滤">{{ item.subscriptionFilter }}</a-descriptions-item>
                   <a-descriptions-item v-if="item.error" label="原因代码">{{ item.error }}</a-descriptions-item>
                   <a-descriptions-item v-if="item.result?.blockedByEventId" label="前序事件"><ObjRef kind="event" :id="item.result.blockedByEventId">{{ item.result.blockedByEventId }}</ObjRef></a-descriptions-item>
                   <a-descriptions-item v-if="item.result?.httpStatus" label="HTTP回执">{{ item.result.httpStatus }}</a-descriptions-item>

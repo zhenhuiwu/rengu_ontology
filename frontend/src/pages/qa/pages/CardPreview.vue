@@ -35,7 +35,7 @@ const option = computed(() => ({
       <template v-else-if="card.viz === '指标卡'">
         <div class="cp-ell" :title="card.sub"><span class="t-20 fw-600 num c-1">{{ card.value }}</span> <span class="t-12 c-3">{{ card.unit }}</span> <span class="t-12 c-2 num">{{ card.sub }}</span></div>
       </template>
-      <div v-else-if="card.viz === '表格'" class="cp-tbl">
+      <div v-else-if="card.viz === '表格'" class="cp-tbl" role="region" :aria-label="`${card.title}表格预览`" tabindex="0">
         <div v-for="(r, rowIndex) in card.rows" :key="rowIndex" class="cp-tr t-12"><span class="cp-ell c-2" :title="r[0]">{{ r[0] }}</span><span class="num c-1 cp-ell" :title="r[1]">{{ r[1] }}</span></div>
         <span v-if="!card.rows?.length" class="t-12 c-3">查询结果为空</span>
         <span v-if="card.truncated" class="t-12 c-3">仅显示前 200 行中的预览</span>
@@ -52,7 +52,8 @@ const option = computed(() => ({
 .cp-tag { margin-inline-end: 0; flex: none; }
 .cp-body { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; }
 .cp-chart { height: 88px; }
-.cp-tbl { display: flex; flex-direction: column; gap: 2px; }
+.cp-tbl { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow: auto; }
+.cp-tbl:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .cp-tr { display: flex; justify-content: space-between; gap: 8px; }
 .cp-deny { display: flex; align-items: center; justify-content: center; gap: 4px; }
 .cp-ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

@@ -3,12 +3,13 @@
  * AntV X6 画布示例（空画布）。网格背景、拖动平移、Ctrl+滚轮缩放；尺寸跟随父容器，不出现滚动条。
  * 关系图谱 / 状态机页面在此基础上加节点：graph.addNode(...)。通过 @ready 拿到 graph 实例。
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Graph } from '@antv/x6';
-import { GRAY } from '@/theme';
-import { positionGraphLabels } from './graphEdges';
+import { chrome, GRAY } from '@/theme';
+import { fitGraphContent, positionGraphLabels } from './graphEdges';
 
 const emit = defineEmits<{ ready: [graph: Graph] }>();
+const props = defineProps<{ relationship?: boolean }>();
 const el = ref<HTMLDivElement>();
 let graph: Graph | null = null;
 
@@ -18,7 +19,7 @@ onMounted(() => {
     container: el.value,
     autoResize: true,
     background: { color: GRAY.g2 },
-    grid: { visible: true, size: 16, type: 'dot', args: { color: GRAY.g6, thickness: 1 } },
+    grid: props.relationship ? false : { visible: true, size: 16, type: 'dot', args: { color: GRAY.g6, thickness: 1 } },
     panning: true,
     mousewheel: { enabled: true, modifiers: ['ctrl', 'meta'], minScale: 0.3, maxScale: 3 },
   });
@@ -26,10 +27,14 @@ onMounted(() => {
   current.on('render:done', () => positionGraphLabels(current));
   emit('ready', current);
 });
+watch(chrome, () => {
+  graph?.drawBackground({ color: GRAY.g2 });
+  if (!props.relationship) graph?.drawGrid({ type: 'dot', args: { color: GRAY.g6, thickness: 1 } });
+});
 onBeforeUnmount(() => { graph?.dispose(); graph = null; });
 
 const zoom = (d: number) => graph?.zoom(d);
-const fit = () => { graph?.zoomToFit({ padding: 24, maxScale: 1 }); graph?.centerContent(); };
+const fit = () => { if (graph) fitGraphContent(graph); };
 </script>
 
 <template>

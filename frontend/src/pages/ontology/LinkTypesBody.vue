@@ -834,7 +834,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
 .lt-reject { display: flex; gap: 12px; align-items: center; padding: 6px 16px; border-top: var(--border); border-bottom: var(--border); background: var(--g2); flex: none; }
 .lt-tabs { padding: 0 16px; flex: none; }
 .lt-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
-.lt-body { flex: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.lt-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
 .lt-def { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; align-content: start; align-items: start; overflow: auto; }
 .lt-def-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .lt-def-right { min-width: 0; max-width: 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: var(--border); overflow: hidden; }
@@ -876,15 +876,15 @@ onBeforeUnmount(() => { ++definitionSeq; ++catalogSeq; });
 .lt-line.hov { stroke: var(--g8); }
 .lt-line.dash { stroke-dasharray: 5 4; }
 .lt-line.sel { stroke: var(--brand); stroke-width: 2; }
-.lt-elabel { fill: var(--g9); paint-order: stroke; stroke: #fff; stroke-width: 4px; pointer-events: none; }
-.lt-node rect { fill: #fff; stroke: var(--g6); }
+.lt-elabel { fill: var(--g9); paint-order: stroke; stroke: var(--g1); stroke-width: 4px; pointer-events: none; }
+.lt-node rect { fill: var(--g1); stroke: var(--g6); }
 .lt-node text { fill: var(--g10); pointer-events: none; }
 .lt-node.link { cursor: pointer; }
 .lt-node.link:hover rect { stroke: var(--g8); }
 .lt-node.draft rect { stroke-dasharray: 4 3; }
 .lt-node.end rect { stroke: var(--brand); fill: var(--brand-bg); }
 .lt-node.end text { fill: var(--brand); }
-.lt-sel-label rect { fill: #fff; stroke: var(--brand); }
+.lt-sel-label rect { fill: var(--g1); stroke: var(--brand); }
 .lt-sel-label text { fill: var(--brand); }
 .lt-gfoot { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; border-top: var(--border); flex: none; min-width: 0; }
 

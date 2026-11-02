@@ -5,8 +5,7 @@
  * 功能 / 对象权限就地编辑，有修改时底部出现保存条（useUnsavedGuard：切换角色、离开页面要确认）；内置角色和历史版本只读。
  * 行级范围只能基于对象类型里标为“权限依据”的属性（如 订单.大区 = 华东）。
  * 指标按基础对象的范围过滤，再叠加维度对象的范围；业务查看类角色（defaultDeny）没配范围的对象默认不可见。
- * “以此用户预览”：抽屉里汇总该用户所有角色合并后的有效权限，可进入只读预览。
- * URL：?role=R-04&tab=func|obj|row|members&form=edit|scope|members&preview=U010231
+ * URL：?role=R-04&tab=func|obj|row|members&form=edit|scope|members
  * 数据：真模式只读取 /api/admin/v1/roles（src/api/roles.ts），每次写成功后重新拉取；失败显示错误和空态。
  * 本地 mock 仅供显式开发模式使用。
  */
@@ -17,13 +16,12 @@ import AppPagination from '@/components/AppPagination.vue';
 import InfoTip from '@/components/InfoTip.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
-import { usePreviewStore, firstAllowedPage } from '@/stores/preview';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { currentApiContext, isApiError } from '@/api/http';
 import { addRoleMembers, addRoleScope, createRole, deleteRole as apiDeleteRole, loadRolesMeta, loadRolesState, queryRoleMembers, rolesApiOn, removeRoleMember, removeRoleScope, saveRolePermissions, updateRole, type PermObject, type ScopeProp, type RemoteRole } from '@/api/roles';
 import { ADMIN_USERS, paginate, EMPTY, type AdminUser } from '@/mock';
-import { ROLES, FUNC_PAGES, PERM_OBJECTS, SCOPE_PROPS, roleMembers, effectiveAccess, scopeText, type Role, type FuncLevel, type ObjPerm, type RowScope } from '@/mock/roles';
+import { ROLES, FUNC_PAGES, PERM_OBJECTS, SCOPE_PROPS, roleMembers, scopeText, type Role, type FuncLevel, type ObjPerm, type RowScope } from '@/mock/roles';
 
 const route = useRoute();
 const router = useRouter();
@@ -31,7 +29,6 @@ const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] a
 const setQuery = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
 const { readonly: viewReadonly, reason: viewReason } = useReadonly();
 const confirm = useConfirmStore();
-const previewStore = usePreviewStore();
 const nowStr = '2026-10-25 17:10';
 
 // 本页内修改叠加在示例数据上
@@ -289,31 +286,7 @@ async function addMembers() {
   message.success(`已添加 ${add.length} 名成员`);
 }
 
-// 以此用户预览：所有角色合并后的有效权限（用本页正在编辑的角色和成员计算，与 roles.ts effectiveAccess 同一套规则）
-const rolesOf = (u: AdminUser) => roles.value.filter((r) => members.value[r.id].some((m) => m.id === u.id));
-const pvUser = computed(() => allUsers.value.find((u) => u.id === q('preview')) ?? Object.values(members.value).flat().find((u) => u.id === q('preview')));
-const pv = computed(() => {
-  const u = pvUser.value;
-  if (!u) return null;
-  return { u, ...effectiveAccess(u, roles.value, (r) => members.value[r.id] ?? [], permObjects.value) };
-});
-const openPreview = (u: AdminUser) => setQuery({ preview: u.id });
-async function enterPreview() {
-  const p = pv.value;
-  if (!p) return;
-  const ok = await confirm.ask({
-    title: '以此用户预览', target: `${p.u.name}（${p.u.account}）`, okText: '进入预览',
-    fields: [{ label: '角色', value: p.rs.map((r) => r.name).join('、') || '无' }, { label: '可进入', value: p.areasIn.join(' / ') || '无' }],
-    impact: '预览期间界面按该用户的权限显示，所有操作只读、不会执行动作；预览的开始和结束都会记入审计日志。',
-  });
-  if (!ok) return;
-  // 记住回来的位置（角色页，关掉预览抽屉），进入预览后到该用户第一个有权限的页面
-  const back = router.resolve({ path: route.path, query: { ...route.query, preview: undefined } }).fullPath;
-  previewStore.start(p.u, back, p);
-  const first = firstAllowedPage('use') ?? firstAllowedPage();
-  router.push(first ? { name: first } : '/');
-  message.success(`已进入预览：${p.u.name}（只读）`);
-}
+const rolesOf = (u: AdminUser) => roles.value.filter((r) => (members.value[r.id] ?? []).some((m) => m.id === u.id));
 
 // 角色本身：编辑 / 复制 / 删除
 const form = reactive({ name: '', desc: '' });
@@ -484,7 +457,7 @@ async function saveNewRole() {
 
       <div v-else-if="tab === 'obj'" class="rl-body">
         <div class="t-12 c-2 rl-tip">动作还要满足动作类型里的提交条件；能执行动作必须先能查看对象。行级范围在“行级范围”页签维护。<span v-if="lockReason" class="c-3">（{{ lockReason }}）</span></div>
-        <a-table size="small" row-key="objType" :columns="ocols" :data-source="draft.objs" :pagination="false">
+        <a-table class="rl-object-table" size="small" row-key="objType" :scroll="{ x: 850 }" :columns="ocols" :data-source="draft.objs" :pagination="false">
           <template #bodyCell="{ column, record }">
             <span v-if="column.key === 'obj'"><span class="c-1">{{ record.objType }}</span> <span class="t-12 c-3 num">{{ record.api }}</span></span>
             <a-checkbox v-else-if="column.key === 'view'" v-model:checked="record.view" :disabled="locked" @change="!record.view && ((record.actions = []), (record.export = false))" />
@@ -507,7 +480,7 @@ async function saveNewRole() {
           <div><span class="c-1 fw-600">未配置范围的对象：</span><template v-if="role.defaultDeny">默认<span class="c-1">不可见</span>（业务查看类角色，需逐个对象配置范围才可见）</template><template v-else>可见全部行</template><template v-if="unscopedObjs.length"> · 本角色：{{ unscopedObjs.join('、') }} → {{ role.defaultDeny ? '不可见' : '全部行' }}</template></div>
           <div><span class="c-1 fw-600">指标怎么过滤：</span>先按指标基础对象的范围过滤，再叠加所用维度对象的范围，同时满足才计入。例：门店销售额（基础对象 订单，按 门店 拆分）= 订单 按“大区 = 华东”过滤 + 门店 按“大区 = 华东”过滤{{ role.defaultDeny ? '；维度对象没配范围时该维度不可用' : '' }}。</div>
         </div>
-        <a-table size="small" row-key="id" :columns="scols" :data-source="role.scopes" :pagination="false" :locale="{ emptyText: role.defaultDeny ? '没有行级范围：所有对象默认不可见' : '没有行级范围：可见对象的全部行' }">
+        <a-table class="rl-scope-table" size="small" row-key="id" :scroll="{ x: 700 }" :columns="scols" :data-source="role.scopes" :pagination="false" :locale="{ emptyText: role.defaultDeny ? '没有行级范围：所有对象默认不可见' : '没有行级范围：可见对象的全部行' }">
           <template #bodyCell="{ column, record }">
             <span v-if="column.key === 'cond'" class="c-1">{{ record.prop }} <span class="num">{{ record.op }}</span> {{ record.values.join('、') }}</span>
             <a-tooltip v-else-if="column.key === 'op'" :title="lockReason"><a :class="{ 'rl-dis': locked }" @click="!locked && removeScope(record)">删除范围</a></a-tooltip>
@@ -535,7 +508,6 @@ async function saveNewRole() {
               <a-badge v-else-if="column.key === 'status'" :status="badge(record.status)" :text="record.status" />
               <span v-else-if="column.key === 'lastLogin'" class="num">{{ record.lastLogin ?? EMPTY }}</span>
               <a-space v-else-if="column.key === 'op'" :size="12">
-                <a @click="openPreview(record)">以此用户预览</a>
                 <a-tooltip :title="reason"><a :class="{ 'rl-dis': readonly }" @click="!readonly && removeMember(record)">移出</a></a-tooltip>
               </a-space>
             </template>
@@ -593,37 +565,12 @@ async function saveNewRole() {
     </template>
   </a-drawer>
 
-  <a-drawer :open="!!pv" :width="640" :title="pv ? `以此用户预览 · ${pv.u.name}` : ''" @close="setQuery({ preview: undefined })">
-    <template v-if="pv">
-      <a-descriptions :column="2" bordered size="small" class="rl-desc">
-        <a-descriptions-item label="用户"><span>{{ pv.u.name }}</span> <span class="t-12 c-3 num">{{ pv.u.id }}</span></a-descriptions-item>
-        <a-descriptions-item label="部门">{{ pv.u.dept || EMPTY }}</a-descriptions-item>
-        <a-descriptions-item label="角色" :span="2">{{ pv.rs.map((r) => r.name).join('、') || '无' }}</a-descriptions-item>
-        <a-descriptions-item label="可进入" :span="2">{{ pv.areasIn.join(' / ') || '无' }} · <span class="num">{{ pv.func.length }}</span> 个页面（管理 <span class="num">{{ pv.func.filter((p) => p.lv === 'manage').length }}</span>）</a-descriptions-item>
-      </a-descriptions>
-      <div class="t-14 fw-600 c-1 rl-h">能看到的数据（多个角色取并集）</div>
-      <a-table size="small" row-key="name" :pagination="false" :data-source="pv.objs" :columns="[{ title: '对象类型', dataIndex: 'name', key: 'name', width: 100 }, { title: '可见范围', key: 'scope' }, { title: '导出', key: 'exp', width: 60 }, { title: '可执行的动作', key: 'actions', width: 220 }]">
-        <template #bodyCell="{ column, record }">
-          <span v-if="column.key === 'scope'" :class="record.scope === '全部' ? 'c-2' : 'c-1'">{{ record.scope }}</span>
-          <span v-else-if="column.key === 'exp'">{{ record.exp ? '可以' : EMPTY }}</span>
-          <span v-else-if="column.key === 'actions'" class="t-12">{{ record.actions.join('、') || EMPTY }}</span>
-        </template>
-      </a-table>
-    </template>
-    <template #footer>
-      <div class="rl-foot">
-        <span class="t-12 c-3 rl-fnote">预览为只读，开始和结束都记审计日志</span>
-        <a-button @click="setQuery({ preview: undefined })">关闭</a-button>
-        <a-button type="primary" @click="enterPreview">进入预览</a-button>
-      </div>
-    </template>
-  </a-drawer>
 </template>
 
 <style scoped>
-.rl { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
+.rl { flex: 1; min-width: 0; min-height: 0; display: flex; gap: var(--gap); }
 .rl-list { width: 300px; flex: none; }
-.rl-items { flex: 1; min-height: 0; overflow: hidden; }
+.rl-items { flex: 1; min-height: 0; overflow: auto; }
 .rl-item { padding: 10px 16px; border-bottom: var(--border); border-left: 3px solid transparent; cursor: pointer; }
 .rl-item:hover { background: var(--g2); }
 .rl-item.on { background: var(--brand-bg); border-left-color: var(--brand); }
@@ -632,16 +579,16 @@ async function saveNewRole() {
 .rl-n { margin-left: auto; flex: none; }
 .rl-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; display: block; }
 .rl-detail { flex: 1; min-width: 0; position: relative; }
-.rl-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px 4px; }
+.rl-head { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; padding: 14px 20px 4px; }
 .rl-title { display: flex; align-items: center; gap: 10px; }
 .rl-sub { padding: 0 20px; }
 .rl-tabs { padding: 0 20px; flex: none; }
 .rl-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
-.rl-body { flex: 1; min-height: 0; padding: 12px 20px 16px; display: flex; flex-direction: column; gap: 10px; }
+.rl-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 12px 20px 16px; display: flex; flex-direction: column; gap: 10px; }
 .rl-tip { flex: none; }
 .rl-rule { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; margin-bottom: 12px; background: var(--g2); border-radius: var(--radius); }
-.rl-areas { flex: 1; min-height: 0; display: flex; gap: 16px; }
-.rl-area { flex: 1; min-width: 0; border: var(--border); border-radius: var(--radius); padding: 8px 12px; }
+.rl-areas { flex: 1; min-height: 0; display: flex; flex-wrap: wrap; gap: 16px; }
+.rl-area { flex: 1 1 260px; min-width: 0; border: var(--border); border-radius: var(--radius); padding: 8px 12px; }
 .rl-ah { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 6px; border-bottom: var(--border); }
 .rl-fp { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: var(--border); }
 .rl-fp:last-child { border-bottom: 0; }
@@ -653,6 +600,9 @@ async function saveNewRole() {
 .rl-prop { border: var(--border); border-radius: var(--radius); padding: 6px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .rl-mem { padding-bottom: 0; }
 .rl-mtable { flex: 1; min-height: 0; }
+.rl-object-table :deep(.ant-table-content > table) { min-width: 850px !important; }
+.rl-scope-table :deep(.ant-table-content > table) { min-width: 700px !important; }
+.rl-mtable :deep(.ant-table-content > table) { min-width: 1050px !important; }
 .rl-pager { padding: 4px 0 8px; }
 .rl-w220 { width: 220px; }
 .rl-dis { color: var(--g6); cursor: not-allowed; }
@@ -661,4 +611,6 @@ async function saveNewRole() {
 .rl-fnote { margin-right: auto; }
 .rl-preview { background: var(--g2); border: var(--border); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 8px; }
 .rl-desc :deep(.ant-descriptions-item-label) { width: 80px; }
+@media (max-width: 1000px) { .rl-list { width: 220px; } .rl-props { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .rl { flex-direction: column; overflow: auto; } .rl-list { width: 100%; max-height: 220px; } .rl-detail { min-height: 460px; flex: none; } .rl-rowhead { flex-wrap: wrap; } }
 </style>

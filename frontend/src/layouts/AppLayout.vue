@@ -60,10 +60,10 @@ const crumbs = computed(() => {
 </template>
 
 <style scoped>
-.app { height: 100dvh; display: flex; flex-direction: column; }
+.app { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
 .app-main { flex: 1; min-height: 0; display: flex; }
-.app-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.app-content { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .workspace-loading { margin: auto; }
 .page-extra { display: flex; gap: 8px; }
-.page-body { flex: 1; min-height: 0; padding: var(--gap); display: flex; flex-direction: column; }
+.page-body { flex: 1; min-height: 0; min-width: 0; padding: var(--gap); display: flex; flex-direction: column; }
 </style>

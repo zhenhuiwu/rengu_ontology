@@ -34,16 +34,10 @@ async function load() {
     if (!api.isReal()) throw new Error('相关模块尚未启用真实接口');
     return (await api.get<PageResult<unknown>>(path, options)).total;
   };
-  // 可试算计数走只读批量就绪接口；历史版本不借用当前映射，失败时只省略计数，不影响步骤状态。
-  const readiness = async () => {
-    if (ctx.ver) return '';
-    try { const r = await ontology.get<{ total: number; ready: number }>('/metrics/trial-readiness', { ...options, query: { ver: ctx.ver, previewAs: ctx.previewAs } }); return `（${r.ready}/${r.total} 可试算）`; }
-    catch { return '（可试算数加载失败）'; }
-  };
   const results = await Promise.allSettled([
     count('data', '/datasources').then((n) => ({ count: n, detail: `${n} 个已登记连接；登记不代表连通性检查通过` })),
     ontology.get<OverviewSummary>('/ontology/overview', options).then((summary) => ({ count: summary.cards.filter((c) => ['obj', 'link'].includes(c.key)).reduce((n,c) => n+c.count,0), detail: summary.cards.filter((c) => ['obj','link'].includes(c.key)).map((c) => `${c.count} ${c.unit}${c.title}`).join(' · ') })),
-    Promise.all([count('static', '/metrics'), count('static', '/dimensions'), count('static', '/knowledge'), readiness()]).then(([m,d,k,r]) => ({ count: m+d+k, detail: `${m} 个指标${r} · ${d} 个维度/码表 · ${k} 条知识` })),
+    Promise.all([count('static', '/metrics'), count('static', '/dimensions'), count('static', '/knowledge')]).then(([m,d,k]) => ({ count: m+d+k, detail: `${m} 个指标 · ${d} 个维度/码表 · ${k} 条知识` })),
     // 函数列表不按 ?ver= 区分版本，历史版本下不借用当前数量。
     ctx.ver ? Promise.resolve({ count: -1, detail: '函数列表不区分历史版本，请在函数页查看。' }) : count('static', '/functions').then((n) => ({ count: n, detail: `${n} 个函数（全部状态）` })),
     Promise.all([count('action', '/action-types'), count('action', '/event-types')]).then(([a,e]) => ({ count: a+e, detail: `${a} 个动作类型 · ${e} 个事件类型` })),

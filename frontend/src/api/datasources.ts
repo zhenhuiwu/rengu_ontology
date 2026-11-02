@@ -74,3 +74,46 @@ export const updateDatasource = async (id: string, body: DatasourceWrite) => toD
 export const deleteDatasource = (id: string) => api.delete<void>(path(id));
 export const testDatasource = (id: string) => api.post<DsTest>(`${path(id)}:test`);
 export const testDatasourceParams = (body: Partial<DatasourceWrite> & { host: string }) => api.post<DsTest>('/datasources:test', body);
+
+export const listDatasourceSchemas = (id: string) => api.get<{items: string[]}>(`${path(id)}/schemas`);
+export const refreshDatasourceTables = (id: string, schemas: string[]) => api.post(`${path(id)}/tables:refresh`, { schemas });
+
+export type MirrorStatus = 'not_started' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export interface MirrorState {
+  mode: 'full'; status: MirrorStatus; processed: number; totalStored: number; currentStored: number;
+  complete: boolean; stale: boolean; error: string | null; updatedAt: string | null; lastFinishedAt: string | null;
+  dataUpdatedAt: string | null; dataCheckedAt: string | null;
+  deletionsAligned?: boolean; dataPublishedAt?: string | null;
+  migrationRequired?: boolean; errorCode?: string;
+  runId: number | null; batchSize: number | null; resumable: boolean; restartRequired: boolean;
+  sourceFingerprint: string | null; structureFingerprint: string | null;
+}
+export type MirrorTaskResult = Pick<MirrorState, 'status' | 'processed' | 'complete'> & Partial<Pick<MirrorState, 'mode' | 'runId'>>;
+export const getObjectMirror = (id: string) => api.get<MirrorState>(`/external-read-bindings/${encodeURIComponent(id)}/mirror`);
+export const startObjectMirror = (id: string, body: { maxRows: number; restart: boolean }) => api.post<MirrorTaskResult>(`/external-read-bindings/${encodeURIComponent(id)}/mirror`, body);
+export const cancelObjectMirror = (id: string) => api.post<MirrorTaskResult>(`/external-read-bindings/${encodeURIComponent(id)}/mirror/cancel`);
+
+export interface MirrorRun { id: number; trigger: 'manual' | 'scheduled' | 'cdc_snapshot'; status: string; startedAt: string | null; finishedAt: string | null; readCount: number; writeCount: number; complete: boolean; error: string | null }
+export const listObjectMirrorRuns = (id: string, page: number, size: number) => api.get<PageResult<MirrorRun>>(`/external-read-bindings/${encodeURIComponent(id)}/mirror/runs`, { query: { page, size } });
+
+export const getMirrorScheduler = () => api.get<{ active: boolean; lastHeartbeat: string | null; error: string | null }>('/mirror-scheduler/status');
+
+
+export interface CdcState {
+  phase: 'not_installed' | 'installed' | 'snapshot' | 'catching_up' | 'streaming' | 'paused' | 'reconnecting' | 'failed';
+  enabled: boolean; installed: boolean; captureMode: string; migrationRequired?: boolean;
+  version: number | null; subscriptionVersion: number | null; heartbeatAt: string | null; leaseUntil: string | null; workerActive: boolean;
+  pendingAckCount: number; pendingCount: number | null; lastSourceEventAt: string | null; lastObservedAt: string | null; lastAppliedAt: string | null;
+  sourcePendingAgeSeconds?: number | null; error: string | null; errorCode: string | null;
+  recoveryAction: 'install' | 'enable' | 'resume' | 'reinitialize' | null; restartRequired: boolean; sourceGeneration: string | null;
+}
+export interface CdcProbe { supported: boolean; installed?: boolean; captureMode?: string; error?: string | null; errorCode?: string | null; message?: string; requiredPrivileges?: string[]; details?: { error?: string; message?: string; requiredPrivileges?: string[] } }
+export interface CdcPlan { planDigest: string; capture: { schema?: string; table?: string; generation?: string; [key: string]: unknown }; sql: string[] | string; bootstrapFenceSql?: string; bootstrapFenceRequired?: boolean; requiresSourceWrite: boolean }
+const cdcPath = (id: string) => `/external-read-bindings/${encodeURIComponent(id)}/cdc`;
+export const getObjectCdc = (id: string) => api.get<CdcState>(cdcPath(id));
+export const probeObjectCdc = (id: string) => api.post<CdcProbe>(`${cdcPath(id)}/probe`);
+export const planObjectCdc = (id: string, version: number) => api.post<CdcPlan>(`${cdcPath(id)}/plan`, { version });
+export const installObjectCdc = (id: string, version: number, planDigest: string) => api.post<CdcState>(`${cdcPath(id)}/install`, { version, planDigest });
+export const enableObjectCdc = (id: string, version: number, reinitialize = false, maxRows?: number) => api.post<CdcState>(`${cdcPath(id)}/enable`, { version, reinitialize, ...(maxRows != null ? { maxRows } : {}) });
+export const pauseObjectCdc = (id: string) => api.post<CdcState>(`${cdcPath(id)}/pause`);
+export const resumeObjectCdc = (id: string, version: number) => api.post<CdcState>(`${cdcPath(id)}/resume`, { version });

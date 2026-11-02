@@ -41,7 +41,7 @@ const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
 type GroupKey = 'tenant' | 'llm' | 'notify' | 'security';
 const GROUPS: { key: GroupKey; title: string; desc: string }[] = [
-  { key: 'tenant', title: '租户信息', desc: '名称、简称与组织' },
+  { key: 'tenant', title: '组织信息', desc: '仁谷科技与管理员账号' },
   { key: 'llm', title: '大模型连接', desc: '模型接口、用途分配与数据出域' },
   { key: 'notify', title: '通知渠道', desc: '渠道配置与事件通知规则' },
   { key: 'security', title: '安全策略', desc: '密码、登录、会话与数据' },
@@ -506,7 +506,12 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantBase.
         <a-alert v-if="realSettings && tenantState.error" type="error" show-icon :message="tenantState.error">
           <template #action><a-button size="small" :disabled="tenantState.loading || tenantState.saving" @click="reloadTenant">重新加载</a-button></template>
         </a-alert>
-        <a-form v-if="!realSettings || tenantState.ready" layout="horizontal" :label-col="{ style: { width: '128px' } }" :disabled="fieldDis" class="st-grid">
+        <a-descriptions v-if="realSettings && tenantState.ready" bordered :column="{ xs: 1, sm: 1, md: 2 }" size="middle">
+          <a-descriptions-item label="组织名称">{{ draft.tenant.name }}</a-descriptions-item>
+          <a-descriptions-item label="简称">{{ draft.tenant.shortName }}</a-descriptions-item>
+          <a-descriptions-item label="管理员">admin</a-descriptions-item>
+        </a-descriptions>
+        <a-form v-if="!realSettings" layout="horizontal" :label-col="{ style: { width: '128px' } }" :disabled="fieldDis" class="st-grid">
           <a-form-item label="租户全称" required :validate-status="draft.tenant.name.trim() ? '' : 'error'" :help="draft.tenant.name.trim() ? '' : '不能为空'"><a-input v-model:value="draft.tenant.name" :maxlength="40" /></a-form-item>
           <a-form-item label="简称" required extra="用于顶栏租户名称显示" :validate-status="draft.tenant.shortName.trim() ? '' : 'error'"><a-input v-model:value="draft.tenant.shortName" :maxlength="12" show-count /></a-form-item>
           <a-form-item label="租户 ID" extra="创建后不能修改"><span class="num c-2">{{ draft.tenant.tenantId }}</span></a-form-item>
@@ -752,7 +757,7 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantBase.
 .st-mod { margin-left: auto; }
 .st-navfoot { margin-top: auto; padding: 12px 16px; }
 .st-main { flex: 1; min-width: 0; }
-.st-body { flex: 1; min-height: 0; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
+.st-body { flex: 1; min-width: 0; min-height: 0; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
 .st-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 520px)); column-gap: 48px; }
 .st-sec { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
 .st-sect { min-width: 0; }
@@ -782,6 +787,8 @@ const fieldDis = computed(() => readonly.value || (realSettings && (!tenantBase.
 .st-f1 { flex: 1; min-width: 0; }
 .st-f2 { flex: 2; min-width: 0; }
 .st-wfull { width: 100%; }
+@media (max-width: 1000px) { .st-nav { width: 200px; } .st-grid, .st-sec, .st-llm2 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .st { flex-direction: column; overflow: auto; } .st-nav { width: 100%; flex: none; } .st-main { flex: none; min-height: 400px; } }
 .st-keyhint { margin-top: 4px; }
 .st-keyrow { display: flex; gap: 16px; align-items: center; }
 </style>

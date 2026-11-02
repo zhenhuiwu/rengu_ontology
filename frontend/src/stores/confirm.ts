@@ -8,6 +8,7 @@ export interface ConfirmRequest {
   fields?: ConfirmField[];       // 参数
   impact?: string;               // 影响说明
   irreversible?: boolean;        // 不可逆写回：需要勾选确认
+  dangerLabel?: string;          // 不可逆确认的具体影响；省略沿用业务写回提示
   blocked?: string;              // 有阻断时填原因：确定按钮锁住，卡片里显示原因
   okText?: string;
   tag?: string;                  // 标题旁的状态标签，例如“待确认”

@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router';
 import { CloseOutlined, MessageOutlined, SendOutlined, FullscreenOutlined, FullscreenExitOutlined } from '@ant-design/icons-vue';
 import { useAppStore } from '@/stores/app';
-import { clearAssistantPrefill, generateAssistantDraft, putAssistantPrefill, type AssistantDraft, type AssistantTarget, type AssistantEdit } from '@/api/assistant';
+import { assistantVersionReady, clearAssistantPrefill, generateAssistantDraft, putAssistantPrefill, type AssistantDraft, type AssistantTarget, type AssistantEdit } from '@/api/assistant';
 import { currentApiContext } from '@/api/http';
 import { getFunction } from '@/api/functions';
 
@@ -34,15 +34,62 @@ const loading = ref(false);
 const messages = ref<HTMLElement | null>(null);
 const resultScope = ref<{ path: string; version: string } | null>(null);
 const editing = ref<(AssistantEdit & { name: string; base: Record<string, unknown> }) | null>(null);
+const restoring = ref(false);
+const restoreBlocked = ref('');
 const storageNotice = ref('');
+const storageFull = ref(false);
+const STORAGE_PREFIX = 'ontology:assistant:v1:';
+const editPointerKey = computed(() => `ontology:assistant-edit:v1:${encodeURIComponent(currentApiContext().demoAs || app.persona)}:${encodeURIComponent(app.ontologyId)}:functions`);
 const sessionKey = computed(() => `ontology:assistant:v1:${encodeURIComponent(currentApiContext().demoAs || app.persona)}:${encodeURIComponent(app.ontologyId)}:${encodeURIComponent(String(route.name || 'other'))}${editing.value ? ':edit:' + encodeURIComponent(editing.value.targetId) + ':' + encodeURIComponent(editing.value.version) + ':' + editing.value.lockVersion : ''}`);
+const resultContextError = computed(() => {
+  if (!result.value) return '';
+  if (!assistantVersionReady()) return '当前本体版本尚未确认，请等待加载完成后重试。';
+  if (currentApiContext().ver || currentApiContext().previewAs) return '当前为历史版本或身份预览，不能采用建议。';
+  if (!resultScope.value) return '建议缺少生成时的上下文，请重新生成建议。';
+  if (resultScope.value.version !== app.ontologyVersion) return `建议基于${resultScope.value.version === '—' ? '尚无发布的本体' : resultScope.value.version}，当前为${app.ontologyVersion === '—' ? '尚无发布的本体' : app.ontologyVersion}，请重新生成建议。`;
+  if (resultScope.value.path !== route.fullPath) return '当前页面已变化，请返回生成建议时的页面或重新生成。';
+  return '';
+});
 let activeKey = '';
 let loadingSession = false;
 let requestId = 0;
+function rememberEdit() {
+  if (!editing.value) return;
+  const { targetId, version, lockVersion } = editing.value;
+  try { sessionStorage.setItem(editPointerKey.value, JSON.stringify({ targetId, version, lockVersion })); }
+  catch { storageNotice.value = '浏览器未能保存修改入口，刷新后请重新点击 AI 辅助修改。'; }
+}
+function forgetEditPointer() {
+  try { sessionStorage.removeItem(editPointerKey.value); } catch { /* storage unavailable */ }
+}
+async function openAssistant() {
+  open.value = true;
+  if (route.name === 'functions' && route.query.form === 'new') forgetEditPointer();
+  if (editing.value || loading.value || restoring.value || route.name !== 'functions' || typeof route.query.fn !== 'string' || route.query.form === 'new' || currentApiContext().ver || currentApiContext().previewAs) return;
+  const key = editPointerKey.value, path = route.fullPath, context = JSON.stringify(currentApiContext());
+  const id = ++requestId;
+  const current = () => id === requestId && key === editPointerKey.value && path === route.fullPath && context === JSON.stringify(currentApiContext());
+  restoring.value = true; restoreBlocked.value = '';
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (!saved || typeof saved.targetId !== 'string' || !saved.targetId || saved.targetId.length > 64 || typeof saved.version !== 'string' || !saved.version || saved.version.length > 32 || !Number.isSafeInteger(saved.lockVersion) || saved.lockVersion < 1) throw new Error('保存的函数修改入口无效，请重新点击 AI 辅助修改。');
+    if (saved.targetId !== route.query.fn) { forgetEditPointer(); return; }
+    const fresh = await getFunction(saved.targetId, {});
+    if (!current()) return;
+    if (fresh.id !== saved.targetId || fresh.status !== '已发布' || fresh.version !== saved.version || fresh.lockVersion !== saved.lockVersion) throw new Error('函数版本已变化，不能恢复旧修改建议；请重新点击 AI 辅助修改。');
+    restoring.value = false;
+    editing.value = { targetId: fresh.id, version: fresh.version, lockVersion: fresh.lockVersion, name: fresh.name, base: { title: fresh.title, desc: fresh.desc, timeoutS: fresh.timeoutS, code: fresh.code } };
+  } catch (e) {
+    if (current()) restoreBlocked.value = (e as Error).message || '无法恢复函数修改对话，请重新点击 AI 辅助修改。';
+  } finally { if (current()) restoring.value = false; }
+}
 function editFunction(event: Event) {
   const value = (event as CustomEvent).detail;
   if (!value || route.name !== 'functions' || value.targetId !== route.query.fn || currentApiContext().ver || currentApiContext().previewAs) return;
-  editing.value = value; open.value = true;
+  requestId++; restoring.value = false; restoreBlocked.value = '';
+  editing.value = value; rememberEdit(); open.value = true;
 }
 onMounted(() => window.addEventListener('assistant-edit-function', editFunction));
 onBeforeUnmount(() => window.removeEventListener('assistant-edit-function', editFunction));
@@ -55,15 +102,25 @@ function saveSession() {
     return;
   }
   try {
-    const keys = Object.keys(sessionStorage).filter(key => key.startsWith('ontology:assistant:v1:'));
-    if (!keys.includes(activeKey) && keys.length >= 20) { storageNotice.value = '本标签页已保存 20 个对话，请先清理不需要的对话。'; return; }
-    sessionStorage.setItem(activeKey, content); storageNotice.value = '';
+    const keys = Object.keys(sessionStorage).filter(key => key.startsWith(STORAGE_PREFIX));
+    if (!keys.includes(activeKey) && keys.length >= 20) {
+      storageFull.value = true;
+      storageNotice.value = '这个标签页里还有 20 段其他页面的构建对话，当前面板只显示这一页，所以在这里看不到它们。';
+      return;
+    }
+    sessionStorage.setItem(activeKey, content); storageNotice.value = ''; storageFull.value = false;
   }
-  catch { storageNotice.value = '浏览器未能保存本次对话，刷新后可能丢失。'; }
+  catch { storageNotice.value = '浏览器未能保存本次对话，刷新后可能丢失。'; storageFull.value = false; }
+}
+function forgetOtherSessions() {
+  try {
+    for (const key of Object.keys(sessionStorage)) if (key.startsWith(STORAGE_PREFIX) && key !== activeKey) sessionStorage.removeItem(key);
+  } catch { /* storage unavailable */ }
+  saveSession();
 }
 function loadSession(key: string) {
   loadingSession = true;
-  prompt.value = ''; history.value = []; result.value = null; resultScope.value = null; error.value = ''; storageNotice.value = '';
+  prompt.value = ''; history.value = []; result.value = null; resultScope.value = null; error.value = ''; storageNotice.value = ''; storageFull.value = false;
   try {
     const raw = sessionStorage.getItem(key);
     if (!raw || raw.length > 120000) return;
@@ -77,13 +134,20 @@ function loadSession(key: string) {
   finally { loadingSession = false; }
 }
 function clearConversation() {
+  restoring.value = false; restoreBlocked.value = '';
+  if (!editing.value) forgetEditPointer();
   requestId++; loading.value = false; prompt.value = ''; history.value = []; result.value = null; resultScope.value = null; error.value = '';
   clearAssistantPrefill();
-  try { sessionStorage.removeItem(activeKey); storageNotice.value = ''; } catch { /* storage unavailable */ }
+  try { sessionStorage.removeItem(activeKey); storageNotice.value = ''; storageFull.value = false; } catch { /* storage unavailable */ }
 }
+watch(() => JSON.stringify([currentApiContext().demoAs || app.persona, app.ontologyId]), () => {
+  restoring.value = false; restoreBlocked.value = '';
+  editing.value = null;
+  clearAssistantPrefill();
+}, { flush: 'sync' });
 watch(sessionKey, (key) => {
   if (activeKey) saveSession();
-  requestId++; loading.value = false; activeKey = key; loadSession(key); clearAssistantPrefill();
+  requestId++; loading.value = false; activeKey = key; loadSession(key);
 }, { immediate: true, flush: 'sync' });
 watch([prompt, history, result, resultScope], saveSession, { deep: true, flush: 'sync' });
 watch(result, () => { acceptedFields.value = []; });
@@ -101,8 +165,8 @@ watch(() => route.name, name => {
   if (choice) target.value = choice.value; else target.value = 'auto';
 }, { immediate: true });
 watch(() => route.fullPath, (path, previous) => {
-  if (path !== previous) { requestId++; loading.value = false; }
-  if (editing.value && (route.name !== 'functions' || route.query.fn !== editing.value.targetId)) editing.value = null;
+  if (path !== previous) { requestId++; loading.value = false; restoring.value = false; restoreBlocked.value = ''; }
+  if (editing.value && (route.name !== 'functions' || route.query.fn !== editing.value.targetId || route.query.form === 'new')) { forgetEditPointer(); editing.value = null; }
 }, { flush: 'sync' });
 function modelHistory() {
   const older = history.value.slice(0, -6).filter(item => item.role === 'user').map(item => item.content);
@@ -118,18 +182,22 @@ function modelHistory() {
   return combined;
 }
 async function generate() {
-  if (!prompt.value.trim() || loading.value) return;
+  if (!prompt.value.trim() || loading.value || restoring.value || restoreBlocked.value) return;
+  if (!assistantVersionReady()) { error.value = '当前本体版本尚未确认，请等待加载完成后重试。'; return; }
   if (!editing.value && route.name === 'functions' && typeof route.query.fn === 'string' && /(?:修改|编辑|调整|修复|优化).{0,12}(?:当前|这个|此|该|已有)?函数|(?:当前|这个|此|该|已有)函数.{0,12}(?:修改|编辑|调整|修复|优化)/.test(prompt.value)) {
     const id = route.query.fn, question = prompt.value, context = JSON.stringify(currentApiContext());
+    const request = ++requestId, path = route.fullPath, key = activeKey, version = app.ontologyVersion;
+    const current = () => request === requestId && key === activeKey && path === route.fullPath && version === app.ontologyVersion && context === JSON.stringify(currentApiContext());
     loading.value = true;
     try {
       const f = await getFunction(id, {});
-      if (JSON.stringify(currentApiContext()) !== context || route.query.fn !== id || route.name !== 'functions') return;
+      if (!current() || route.query.fn !== id || route.name !== 'functions') return;
       if (f.status !== '已发布') throw new Error('请选择已发布的函数后再修改');
       editing.value = { targetId: f.id, lockVersion: f.lockVersion, version: f.version, name: f.name, base: { title: f.title, desc: f.desc, timeoutS: f.timeoutS, code: f.code } };
+      rememberEdit();
       prompt.value = question;
-    } catch (e) { error.value = (e as Error).message || '无法读取当前函数'; return; }
-    finally { loading.value = false; }
+    } catch (e) { if (current()) error.value = (e as Error).message || '无法读取当前函数'; return; }
+    finally { if (request === requestId) loading.value = false; }
   }
   if (history.value.length >= 20) { error.value = '本次对话已达到 10 轮，请新建对话并概括仍需保留的要求。'; return; }
   let prior: ReturnType<typeof modelHistory>;
@@ -155,8 +223,9 @@ async function generate() {
   } finally { if (id === requestId) loading.value = false; }
 }
 async function apply() {
-  if (!result.value) return;
-  if (!resultScope.value || resultScope.value.path !== route.fullPath || resultScope.value.version !== app.ontologyVersion || app.ontologyVersion === '—' || currentApiContext().ver || currentApiContext().previewAs) { error.value = '页面或本体版本已变化，请重新生成建议。'; return; }
+  if (!result.value || restoring.value || restoreBlocked.value) return;
+  if (resultContextError.value) { error.value = resultContextError.value; return; }
+  error.value = '';
   const choice = choices.find(c => c.value === result.value!.target);
   if (!choice) return;
   if (result.value.target === 'auto') return;
@@ -171,7 +240,6 @@ async function apply() {
     await nextTick();
     window.dispatchEvent(new CustomEvent('assistant-prefill', { detail: prefill }));
     open.value = false;
-    result.value = null;
   } catch { clearAssistantPrefill(); error.value = '无法进入目标页面，请重试'; }
 }
 function assistantMessage(content: string): string {
@@ -190,10 +258,13 @@ function toggleField(key: string, checked: boolean) {
 
 <template>
   <div class="assistant">
-    <button v-if="!open" class="assistant-launch" type="button" aria-label="打开构建助手" @click="open = true"><MessageOutlined /> <span>构建助手</span></button>
+    <button v-if="!open" class="assistant-launch" type="button" aria-label="打开构建助手" @click="openAssistant"><MessageOutlined /> <span>构建助手</span></button>
     <section v-else class="assistant-panel" :class="{ maximized }" aria-label="构建助手">
       <header class="assistant-header"><strong>构建助手<span v-if="editing"> · 修改 {{ editing.name }}（{{ editing.version }}）</span></strong><div class="assistant-header-actions"><a-popconfirm title="清空当前页面的对话和未发送内容？" ok-text="清空" cancel-text="取消" @confirm="clearConversation"><button type="button" class="assistant-clear">新建对话</button></a-popconfirm><button type="button" class="assistant-close" :aria-label="maximized ? '恢复窗口' : '放大窗口'" @click="maximized = !maximized"><FullscreenExitOutlined v-if="maximized" /><FullscreenOutlined v-else /></button><button type="button" class="assistant-close" aria-label="关闭助手" @click="open = false"><CloseOutlined /></button></div></header>
       <div ref="messages" class="assistant-body">
+        <div v-if="restoring" class="assistant-pending" role="status">正在恢复函数修改对话…</div>
+        <div v-else-if="restoreBlocked" class="assistant-error" role="alert">{{ restoreBlocked }}</div>
+        <template v-else>
         <div v-if="!history.length && !result" class="assistant-empty">
           <template v-if="editing"><strong>想如何修改这个函数？</strong><p>描述需要调整的内容，其余定义会保留。</p></template>
           <template v-else><strong>有什么可以帮你构建？</strong><p>例如：创建一个函数，根据状态生成标签</p><p>或者描述一个对象、关系或规则</p></template>
@@ -201,20 +272,22 @@ function toggleField(key: string, checked: boolean) {
         <div v-if="history.length" class="assistant-history"><template v-for="(turn, index) in history" :key="index"><div v-if="turn.role === 'user'" class="assistant-turn"><b>你</b><p>{{ turn.content }}</p></div><div v-else class="assistant-turn reply"><b>助手</b><p>{{ assistantMessage(turn.content) }}</p></div></template></div>
         <div v-if="loading" class="assistant-pending">正在生成建议…</div>
         <div v-if="error" class="assistant-error" role="alert">{{ error }}</div>
-        <div v-if="storageNotice" class="assistant-error" role="status">{{ storageNotice }}</div>
+        <div v-if="storageNotice" class="assistant-error" role="status">{{ storageNotice }} <a-popconfirm v-if="storageFull" title="删除这个标签页里其他页面保存的构建对话？当前这段会保留。" ok-text="清理" cancel-text="取消" @confirm="forgetOtherSessions"><button type="button" class="assistant-clear">清理其他页面的对话</button></a-popconfirm></div>
         <div v-if="result" class="assistant-result">
           <div class="assistant-result-title">建议预览 · {{ result.edit ? `修改 ${editing?.name || result.edit.targetId}（${result.edit.version}）` : choices.find(c => c.value === result?.target)?.label || '待明确模块' }} <span>{{ result.target === 'function' ? '待校验' : '待确认' }}</span></div>
           <p>{{ result.message }}</p>
           <dl><template v-for="(value, key) in result.draft" :key="key"><dt><a-checkbox v-if="result.edit" :checked="acceptedFields.includes(String(key))" @change="(e: any) => toggleField(String(key), e.target.checked)">{{ key }}</a-checkbox><template v-else>{{ key }}</template></dt><dd v-if="result.edit && editing">原值：{{ display(editing.base[String(key)]) }}</dd><dd>{{ result.edit ? '建议：' : '' }}{{ display(value) }}</dd></template></dl>
           <ul v-if="result.warnings?.some(w => !w.includes('函数代码未经验证'))"><li v-for="warning in result.warnings.filter(w => !w.includes('函数代码未经验证'))" :key="warning">{{ warning }}</li></ul>
           <p class="assistant-note">确认后进入表单检查和编辑，助手不会自动保存。</p>
-          <a-button v-if="result.target !== 'auto' && Object.keys(result.draft).length" type="primary" block :disabled="loading" @click="apply">确认并进入表单</a-button>
+          <p v-if="resultContextError" class="assistant-error" role="status">{{ resultContextError }}</p>
+          <a-button v-if="result.target !== 'auto' && Object.keys(result.draft).length" type="primary" block :disabled="loading || !!resultContextError" @click="apply">确认并进入表单</a-button>
         </div>
+        </template>
       </div>
       <div class="assistant-composer">
         <div class="assistant-input-box">
-          <a-textarea id="assistant-prompt" v-model:value="prompt" :auto-size="{ minRows: 2, maxRows: 6 }" :maxlength="2000" :disabled="loading" aria-label="输入构建需求" placeholder="描述你想构建或调整的内容" @keydown="onPromptKeydown" />
-          <div class="assistant-composer-actions"><span>Enter 发送 · Shift + Enter 换行</span><a-button type="primary" :loading="loading" :disabled="!prompt.trim() || loading" aria-label="发送" @click="generate"><template #icon><SendOutlined /></template>发送</a-button></div>
+          <a-textarea id="assistant-prompt" v-model:value="prompt" :auto-size="{ minRows: 2, maxRows: 6 }" :maxlength="2000" :disabled="loading || restoring || !!restoreBlocked" aria-label="输入构建需求" placeholder="描述你想构建或调整的内容" @keydown="onPromptKeydown" />
+          <div class="assistant-composer-actions"><span>Enter 发送 · Shift + Enter 换行</span><a-button type="primary" :loading="loading" :disabled="!prompt.trim() || loading || restoring || !!restoreBlocked" aria-label="发送" @click="generate"><template #icon><SendOutlined /></template>发送</a-button></div>
         </div>
       </div>
     </section>
@@ -223,43 +296,43 @@ function toggleField(key: string, checked: boolean) {
 
 <style scoped>
 .assistant { position: fixed; right: 24px; bottom: 24px; z-index: 1000; }
-.assistant-launch { border: 0; border-radius: 24px; background: #2457d6; color: white; height: 48px; padding: 0 20px; font-weight: 600; box-shadow: 0 8px 24px #163b8d33; cursor: pointer; display: flex; align-items: center; gap: 8px; }
-.assistant-launch:hover { background: #1d4cbd; }
-.assistant-panel { width: min(880px, calc(100vw - 32px)); height: min(82dvh, calc(100dvh - 48px)); display: flex; flex-direction: column; background: white; border: 1px solid #e3e8f1; border-radius: 16px; box-shadow: 0 16px 48px #172a4d2b; overflow: hidden; }
-.assistant-panel.maximized { width: calc(100vw - 48px); height: calc(100dvh - 48px); }
-.assistant-header { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: 1px solid #e3e8f1; }
+.assistant-launch { border: 0; border-radius: 24px; background: var(--brand); color: white; height: 48px; padding: 0 20px; font-weight: 600; box-shadow: 0 8px 24px #163b8d33; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.assistant-launch:hover { filter: brightness(0.92); }
+.assistant-panel { width: min(880px, calc(100vw - 32px)); height: min(82vh, calc(100vh - 48px)); height: min(82dvh, calc(100dvh - 48px)); display: flex; flex-direction: column; background: var(--g1); border: var(--border); border-radius: 16px; box-shadow: 0 16px 48px #172a4d2b; overflow: hidden; }
+.assistant-panel.maximized { width: calc(100vw - 48px); height: calc(100vh - 48px); height: calc(100dvh - 48px); }
+.assistant-header { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: var(--border); }
 .assistant-header-actions { display: flex; align-items: center; gap: 12px; }
 .assistant-header-actions :deep(.ant-select) { width: 150px; }
-.assistant-header strong { display: block; font-size: 16px; color: #18243a; }
-.assistant-header small { display: block; margin-top: 4px; color: #68778d; }
-.assistant-close { border: 0; background: transparent; color: #64748b; padding: 5px; cursor: pointer; }
-.assistant-clear { border: 0; background: transparent; color: #53677f; font-size: 13px; cursor: pointer; }
-.assistant-context { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; background: #f5f8fd; padding: 12px 20px; font-size: 12px; color: #75839a; }
-.assistant-context strong { color: #34445c; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistant-header strong { display: block; font-size: 16px; color: var(--g10); }
+.assistant-header small { display: block; margin-top: 4px; color: var(--g8); }
+.assistant-close { border: 0; background: transparent; color: var(--g8); padding: 5px; cursor: pointer; }
+.assistant-clear { border: 0; background: transparent; color: var(--g8); font-size: 13px; cursor: pointer; }
+.assistant-context { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; background: var(--g2); padding: 12px 20px; font-size: 12px; color: var(--g8); }
+.assistant-context strong { color: var(--g10); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .assistant-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 20px 24px; }
-.assistant-empty { color: #718096; padding: 12px 0; }
-.assistant-empty strong { color: #334155; font-size: 16px; }
+.assistant-empty { color: var(--g8); padding: 12px 0; }
+.assistant-empty strong { color: var(--g10); font-size: 16px; }
 .assistant-empty p { margin: 10px 0 0; font-size: 13px; }
 .assistant-history { display: flex; flex-direction: column; gap: 12px; }
-.assistant-turn { align-self: flex-end; max-width: 85%; min-width: 0; padding: 10px 14px; border-radius: 12px; background: #edf3ff; font-size: 13px; overflow-wrap: anywhere; }
-.assistant-turn.reply { align-self: flex-start; background: #f5f7fa; }
-.assistant-turn b { color: #53677f; }
+.assistant-turn { align-self: flex-end; max-width: 85%; min-width: 0; padding: 10px 14px; border-radius: 12px; background: var(--brand-bg); font-size: 13px; overflow-wrap: anywhere; }
+.assistant-turn.reply { align-self: flex-start; background: var(--g2); }
+.assistant-turn b { color: var(--g8); }
 .assistant-turn p { white-space: pre-wrap; margin: 4px 0 0; }
-.assistant-pending { margin-top: 12px; color: #718096; font-size: 13px; }
-.assistant-composer { flex-shrink: 0; padding: 12px 20px 18px; border-top: 1px solid #e3e8f1; background: #fff; }
-.assistant-input-box { border: 1px solid #d9dfe9; border-radius: 10px; padding: 4px 6px 6px; }
-.assistant-input-box:focus-within { border-color: #2457d6; box-shadow: 0 0 0 2px #2457d61a; }
-.assistant-composer :deep(textarea) { resize: none; border: 0; box-shadow: none; }
-.assistant-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px; color: #8793a4; font-size: 12px; }
-.assistant-error { margin-top: 12px; color: #b42318; }
-.assistant-result { min-width: 0; overflow-x: auto; margin-top: 18px; border: 1px solid #dce6f8; border-radius: 10px; padding: 14px; background: #f9fbff; }
-.assistant-result-title { font-weight: 600; color: #20365e; }
-.assistant-result-title span { float: right; color: #8a6614; font-size: 12px; font-weight: 400; }
+.assistant-pending { margin-top: 12px; color: var(--g8); font-size: 13px; }
+.assistant-composer { flex-shrink: 0; padding: 12px 20px 18px; border-top: var(--border); background: var(--g1); }
+.assistant-input-box { border: var(--border); border-radius: 10px; padding: 4px 6px 6px; }
+.assistant-input-box:focus-within { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand-bg); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 16%, transparent); }
+.assistant-composer :deep(textarea) { resize: none; border: 0; box-shadow: none; background: transparent; color: var(--g10); }
+.assistant-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px; color: var(--g8); font-size: 12px; }
+.assistant-error { margin-top: 12px; color: var(--error); }
+.assistant-result { min-width: 0; overflow-x: auto; margin-top: 18px; border: var(--border); border-radius: 10px; padding: 14px; background: var(--g2); }
+.assistant-result-title { font-weight: 600; color: var(--g10); }
+.assistant-result-title span { float: right; color: var(--warning); font-size: 12px; font-weight: 400; }
 .assistant-result p { margin: 10px 0; white-space: pre-wrap; }
 .assistant-result dl { margin: 0; font-size: 12px; }
-.assistant-result dt { color: #718096; margin-top: 9px; }
-.assistant-result dd { margin: 2px 0 0; color: #283b55; overflow-wrap: anywhere; white-space: pre-wrap; }
-.assistant-result ul { padding-left: 18px; color: #906519; }
-.assistant-note { color: #718096; font-size: 12px; }
-button:focus-visible { outline: 2px solid #2457d6; outline-offset: 3px; }
+.assistant-result dt { color: var(--g8); margin-top: 9px; }
+.assistant-result dd { margin: 2px 0 0; color: var(--g9); overflow-wrap: anywhere; white-space: pre-wrap; }
+.assistant-result ul { padding-left: 18px; color: var(--warning); }
+.assistant-note { color: var(--g8); font-size: 12px; }
+button:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
 </style>

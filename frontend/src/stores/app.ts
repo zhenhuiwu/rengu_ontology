@@ -7,33 +7,28 @@ import { notificationContextKey } from '@/api/notifications';
 import type { OntologyWorkspace } from '@/api/workspaces';
 import { NEXT_VERSION as MOCK_NEXT_VERSION } from '@/mock/changes';
 
-export const TENANTS = [
-  { value: 'hd', label: '鲜邻零售集团 / 华东事业部' },
-  { value: 'hn', label: '鲜邻零售集团 / 华南事业部' },
-  { value: 'hq', label: '鲜邻零售集团 / 集团总部' },
-];
+export const TENANTS = [{ value: 'hd', label: '仁谷科技' }];
 
 export type AreaKey = NavArea['key'];
 
 /**
  * 演示用户（mock）。permissions 决定能进入哪些区（使用 / 构建 / 管理）：
  * 没有权限的区，左侧切换按钮隐藏，直接访问该区路由会被重定向回首页。
- * 演示切换：URL 带 ?as=viewer（只有“使用”）或 ?as=admin（默认，三个区都有），在当前标签页内保持。
+ * 旧演示身份仅保留兼容字段；真实身份由登录会话决定，URL 参数不能切换身份。
  */
 export const PERSONAS = {
-  admin: { name: '王敏', role: '数据产品经理', permissions: ['use', 'build', 'admin'] as AreaKey[] },
+  admin: { name: 'admin', role: '数据产品经理', permissions: ['use', 'build', 'admin'] as AreaKey[] },
   viewer: { name: '李娜', role: '门店运营（只读）', permissions: ['use'] as AreaKey[] },
 } as const;
 export type PersonaKey = keyof typeof PERSONAS;
 
-const PERSONA_KEY = 'ui-vue:persona';     // sessionStorage：只在当前标签页生效，不影响其他标签页和截图
 const WORKSPACE_KEY = 'ui-vue:ontology';
 const workspaceId = () => { try { return new URLSearchParams(location.search).get('ontology') ?? sessionStorage.getItem(WORKSPACE_KEY) ?? '1'; } catch { return '1'; } };
 const hasSavedWorkspace = () => { try { return !!sessionStorage.getItem(WORKSPACE_KEY); } catch { return false; } };
 const lastRouteKey = (id: string) => `ui-vue:lastRoute:${id}`;
 
 const loadPersona = (): PersonaKey => {
-  try { const v = sessionStorage.getItem(PERSONA_KEY); return v && v in PERSONAS ? (v as PersonaKey) : 'admin'; } catch { return 'admin'; }
+  return 'admin';
 };
 const loadLastRoute = (id: string): Partial<Record<AreaKey, string>> => {
   try { return JSON.parse(localStorage.getItem(lastRouteKey(id)) || '{}'); } catch { return {}; }
@@ -59,8 +54,8 @@ export const useAppStore = defineStore('app', {
       notices: anyReal() ? [] : NOTICES.map((n) => ({ ...n })),
       notificationUnread: 0,
       persona,
-      user: { name: isReal('admin') ? '' : PERSONAS[persona].name as string, role: isReal('admin') ? '' : PERSONAS[persona].role as string },
-      permissions: [...PERSONAS[persona].permissions] as AreaKey[],
+      user: { name: '', role: '' },
+      permissions: [] as AreaKey[],
       /** 每个区上次访问的完整路由（不含抽屉参数），切换区时回到这里 */
       lastRoute: loadLastRoute(workspaceId()),
     };
@@ -83,13 +78,8 @@ export const useAppStore = defineStore('app', {
       this.workspaceSelectionSaved = false;
       try { sessionStorage.removeItem(WORKSPACE_KEY); } catch { /* private mode */ }
     },
-    setPersona(p: PersonaKey) {
-      this.persona = p;
-      this.notificationUnread = 0;
-      this.user = isReal('admin') ? { name: '', role: '' } : { name: PERSONAS[p].name, role: PERSONAS[p].role };
-      this.permissions = [...PERSONAS[p].permissions];
-      try { sessionStorage.setItem(PERSONA_KEY, p); } catch { /* 隐私模式 */ }
-    },
+    /** Retained for old callers; a client persona cannot change a real session. */
+    setPersona(_p: PersonaKey) {},
     /** 由路由守卫根据 ?ver= 调用；等于当前版本或不存在的版本都视为当前版本 */
     setViewVersion(v: string | null) {
       this.viewVersion = v && v !== this.ontologyVersion && releaseByVer(v) ? v : null;

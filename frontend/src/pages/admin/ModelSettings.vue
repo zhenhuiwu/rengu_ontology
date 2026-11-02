@@ -12,12 +12,11 @@ type ModelDraft = ModelSettingsData & { changeKey: boolean; apiKey: string };
 const items = ref<ModelDraft[]>([]);
 const saved = ref<ModelSettingsData[]>([]);
 const loading = ref(false), saving = ref(''), error = ref(''), canManage = ref(false);
-const origins = ref<string[]>([]);
 const confirm = useConfirmStore();
 let sequence = 0;
 const editable = computed(() => canManage.value && !props.readonly && !loading.value && !saving.value);
 const disabledReason = computed(() => props.reason || (!canManage.value ? '没有系统配置管理权限' : ''));
-const fields = (row: ModelSettingsData) => ({ model: row.model, baseUrl: row.baseUrl, timeoutSec: row.timeoutSec, enabled: row.enabled, lockVersion: row.lockVersion });
+const fields = (row: ModelSettingsData) => ({ model: row.model, baseUrl: row.baseUrl, timeoutSec: row.timeoutSec, enabled: row.enabled, authMode: row.authMode, lockVersion: row.lockVersion });
 const dirtyRow = (row: ModelDraft) => row.changeKey || JSON.stringify(fields(row)) !== JSON.stringify(fields(saved.value.find((x) => x.usage === row.usage)!));
 const dirty = computed(() => items.value.some(dirtyRow));
 watch(dirty, (value) => emit('dirty', value), { immediate: true });
@@ -33,7 +32,7 @@ async function load() {
     emptyKey();
     saved.value = data.items;
     items.value = data.items.map((row) => ({ ...row, changeKey: false, apiKey: '' }));
-    canManage.value = data.canManage; origins.value = data.trustedOrigins;
+    canManage.value = data.canManage;
   } catch (e) { if (seq === sequence && user === identity()) error.value = `模型配置加载失败：${errText(e)}`; }
   finally { if (seq === sequence) loading.value = false; }
 }
@@ -44,12 +43,16 @@ function validation(row: ModelDraft): string {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127}$/.test(row.model)) return '请输入有效模型名';
   try {
     const url = new URL(row.baseUrl);
-    const origin = `${url.protocol}//${url.hostname}:${url.port || (url.protocol === 'https:' ? '443' : '80')}`;
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || !origins.value.includes(origin)) return '模型地址须使用部署已授权源站，且不能含凭据、查询串或片段';
+    if (!['http:', 'https:'].includes(url.protocol) || row.baseUrl.includes('\\') || /[\s\x00-\x1f]/.test(row.baseUrl)) return '请输入有效的 HTTP(S) Base URL';
+    if (url.username || url.password || /^https?:\/\/[^/]*@/i.test(row.baseUrl)) return '地址不能包含凭据，请填写密钥字段';
+    if (row.baseUrl.includes('?') || url.search) return '暂不支持查询参数，请移除后重试';
+    if (row.baseUrl.includes('#') || url.hash) return '地址片段不会发送给模型服务，请移除后重试';
   } catch { return '请输入有效的 HTTP(S) Base URL'; }
   if (!(row.timeoutSec >= 5 && row.timeoutSec <= 300)) return '超时须在 5～300 秒之间';
-  if (row.changeKey && !/^[\x21-\x7e]{1,4096}$/.test(row.apiKey)) return '新密钥不能为空或包含空白';
-  if (row.enabled && !row.hasKey && !row.changeKey) return '启用模型前请配置密钥';
+  if (row.authMode === 'key' && row.changeKey && !/^[\x21-\x7e]{1,4096}$/.test(row.apiKey)) return '新密钥不能为空或包含空白';
+  const old = saved.value.find((x) => x.usage === row.usage)!;
+  if (row.authMode === 'key' && !row.changeKey && (new URL(row.baseUrl).origin !== new URL(old.baseUrl).origin || old.authMode === 'none')) return '更换源站或启用密钥认证时，请填写该服务的新密钥';
+  if (row.enabled && row.authMode === 'key' && !row.hasKey && !row.changeKey) return '启用模型前请配置密钥';
   return '';
 }
 async function save(row: ModelDraft) {
@@ -57,13 +60,13 @@ async function save(row: ModelDraft) {
   const invalid = validation(row);
   if (invalid) { message.error(invalid); return; }
   const ok = await confirm.ask({ title: '保存模型配置', target: row.label, okText: '保存',
-    fields: [{ label: '模型', value: row.model }, { label: '状态', value: row.enabled ? '启用' : '停用' }, { label: '密钥', value: row.changeKey ? '更换，保存后不可查看' : '保留当前密钥' }],
+    fields: [{ label: '模型', value: row.model }, { label: '状态', value: row.enabled ? '启用' : '停用' }, { label: '认证', value: row.authMode === 'none' ? '无鉴权' : row.changeKey ? '更换密钥，保存后不可查看' : '保留当前密钥' }],
     impact: '配置对之后新发起的调用生效，并记入审计；本次保存不会调用模型。' });
   if (!ok || !editable.value) return;
   const seq = sequence, user = identity();
   saving.value = row.usage; error.value = '';
   try {
-    const data = await saveModelSettings(row.usage, { ...fields(row), ...(row.changeKey ? { apiKey: row.apiKey } : {}) });
+    const data = await saveModelSettings(row.usage, { ...fields(row), ...(row.authMode === 'key' && row.changeKey ? { apiKey: row.apiKey } : {}) });
     if (seq !== sequence || user !== identity()) return;
     saved.value = saved.value.map((x) => x.usage === row.usage ? data : x);
     Object.assign(row, data, { changeKey: false, apiKey: '' });
@@ -93,9 +96,10 @@ async function discard(row: ModelDraft) {
           <div v-if="row.updatedAt" class="t-12 c-3 model-updated">最近修改：{{ row.updatedAt }}</div>
           <a-form layout="vertical" :disabled="!editable">
             <a-form-item label="模型名" required><a-input v-model:value="row.model" :maxlength="128" class="num" autocomplete="off" /></a-form-item>
-            <a-form-item label="Base URL" required extra="仅允许部署已授权的模型源站"><a-input v-model:value="row.baseUrl" :maxlength="1000" class="num" autocomplete="off" /></a-form-item>
+            <a-form-item label="Base URL" required extra="支持 HTTP(S) 地址和自定义路径；凭据请填密钥字段，暂不支持查询参数或片段"><a-input v-model:value="row.baseUrl" :maxlength="1000" class="num" autocomplete="off" /></a-form-item>
             <div class="model-row"><a-form-item label="超时"><a-input-number v-model:value="row.timeoutSec" :min="5" :max="300" addon-after="秒" /></a-form-item><a-form-item label="状态"><a-switch v-model:checked="row.enabled" checked-children="启用" un-checked-children="停用" /></a-form-item></div>
-            <a-form-item label="密钥">
+            <a-form-item label="认证方式"><a-select v-model:value="row.authMode" :options="[{ value: 'key', label: 'API 密钥' }, { value: 'none', label: '无鉴权' }]" @change="row.apiKey = ''; row.changeKey = false" /></a-form-item>
+            <a-form-item v-if="row.authMode === 'key'" label="密钥">
               <div class="model-key"><span class="c-2">{{ row.hasKey ? '已配置（不可查看）' : '未配置' }}<span v-if="row.hasKey"> · {{ row.keySource === 'database' ? '平台加密保存' : '部署配置' }}</span></span><a-checkbox v-model:checked="row.changeKey" @change="!row.changeKey && (row.apiKey = '')">更换密钥</a-checkbox></div>
               <a-input-password v-if="row.changeKey" v-model:value="row.apiKey" autocomplete="new-password" placeholder="输入新密钥，不填不替换原密钥" :maxlength="4096" class="model-secret" />
             </a-form-item>

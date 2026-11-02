@@ -7,9 +7,10 @@
  * 取数见 objMeta.ts 和 objRows.ts；真实数据、分面和计数使用同一查询，失败直接提示。
  * 预览（?previewAs=）：行和计数只含被预览用户范围内的数据，导出只读，提问照常。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
 import { currentApiContext } from '@/api/http';
+import { fitColumns } from '@/tableColumns';
 import { message } from 'ant-design-vue';
 import { DownloadOutlined, MessageOutlined, LockOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -85,27 +86,31 @@ const pq = usePagedQuery({ defaultSize: qaReal() ? 10 : 16, filters: filterSig }
 const res = ref<RowsResult | null>(null);
 const loading = ref(false);
 let seq = 0;
+let searchRequest: AbortController | undefined;
 let facetsKey = '';
 let lastFacets: FacetMeta[] = [];
 async function load() {
   const my = ++seq;
+  searchRequest?.abort();
   const ctx = contextKey.value;
   const m = meta.value;
   searchError.value = '';
   if (!m) { res.value = null; loading.value = false; return; }
   loading.value = true;
+  searchRequest = new AbortController();
   const key = JSON.stringify([ctx, m.id, kw.value, filters.value]);
   const q = { kw: kw.value, filters: filters.value, sort: sort.value, page: pq.page.value, size: pq.size.value, withFacets: key !== facetsKey };
   try {
-    const r = await searchRows(m, q, qaLive.value, pv.scopeOf);
-    if (my === seq && ctx === contextKey.value) {
+    const r = await searchRows(m, q, qaLive.value, pv.scopeOf, searchRequest.signal);
+    if (my === seq && ctx === contextKey.value && m === meta.value) {
       if (q.withFacets) { lastFacets = r.facets; facetsKey = key; }
       res.value = { ...r, facets: lastFacets };
       if (r.page && r.page !== pq.page.value) pq.page.value = r.page;
     }
-  } catch (e) { if (my === seq) { res.value = null; searchError.value = `对象搜索失败：${errText(e)}`; } } finally { if (my === seq) loading.value = false; }
+  } catch (e) { if (my === seq && ctx === contextKey.value && m === meta.value && (e as Error)?.name !== 'AbortError') { res.value = null; searchError.value = `对象搜索失败：${errText(e)}`; } } finally { if (my === seq) loading.value = false; }
 }
 watch([meta, qaLive, filterSig, pq.page, pq.size, () => pv.userName.value], load, { immediate: true });
+onBeforeUnmount(() => { ++seq; ++typesSeq; ++metaSeq; searchRequest?.abort(); });
 const total = computed(() => res.value?.total ?? 0);
 const bound = computed(() => res.value?.bound ?? true);
 const facets = computed(() => (res.value?.facets ?? []).filter((f) => prop(f.key)));
@@ -137,15 +142,15 @@ const scopeText = computed(() => (pv.active.value
 /* 表格：标题列 + listed 属性；只有 sortable 能排序 */
 const listed = computed<PropMeta[]>(() => (meta.value?.properties ?? []).filter((p) => p.listed && p.key !== meta.value?.titleProp && !p.sensitive));
 const sortOrder = (k: string) => (sort.value === k ? 'ascend' : sort.value === `-${k}` ? 'descend' : null);
-const columns = computed(() => [
+const columns = computed(() => fitColumns([
   { title: prop(meta.value?.titleProp ?? '')?.name ?? '名称', key: '__title', width: 240, ellipsis: true },
   ...listed.value.map((p) => ({
     title: propLabel(p), key: p.key, ellipsis: true,
-    width: ['date', 'timestamp'].includes(p.dataType) ? 184 : isNumeric(p) ? 140 : undefined,
+    width: ['date', 'timestamp'].includes(p.dataType) ? 184 : isNumeric(p) ? 140 : 160,
     align: isNumeric(p) ? ('right' as const) : undefined,
     sorter: p.sortable, sortOrder: p.sortable ? sortOrder(p.key) : undefined,
   })),
-]);
+]));
 function onTable(_p: unknown, _f: unknown, s: any) {
   const one = Array.isArray(s) ? s[0] : s;
   patch({ sort: one?.order ? `${one.order === 'descend' ? '-' : ''}${one.columnKey}` : null, page: null });
@@ -238,7 +243,8 @@ const openDetail = (r: objApi.ExploreRow) => router.push({ path: '/use/objects/d
       </div>
       <div class="os-body">
         <a-alert v-if="loadError" type="error" :message="loadError" show-icon />
-        <template v-else-if="total">
+        <a-alert v-if="res?.mirrorCompleteness === 'partial'" type="info" message="已同步部分数据，当前数量尚不完整。" show-icon />
+        <template v-if="!loadError && total">
           <div class="paged-scroll os-tbl">
             <a-table :columns="columns" :data-source="res!.items" row-key="id" size="middle" table-layout="fixed" :pagination="false" :loading="loading"
               :show-sorter-tooltip="false"

@@ -12,7 +12,7 @@ export interface WorkspaceList extends Partial<Omit<PageResult<OntologyWorkspace
 const api = apiClient('versioning');
 const platform = { ontologyScope: false, readonlyParams: false };
 export const workspaceCatalog = () => api.get<WorkspaceList>('/workspaces/catalog', platform);
-export const listWorkspaces = (page?: number, size?: number) => api.get<WorkspaceList>('/workspaces', { ...platform, query: { page, size } });
+export const listWorkspaces = (page?: number, size?: number, signal?: AbortSignal) => api.get<WorkspaceList>('/workspaces', { ...platform, query: { page, size }, signal });
 export const currentWorkspace = (id: string) => api.get<OntologyWorkspace>('/workspaces/current', { ...platform, headers: { 'X-Ontology-Id': id } });
 export const createWorkspace = (body: { code: string; name: string; description: string; domain: string }) => api.post<OntologyWorkspace>('/workspaces', body, platform);
 export const deletedWorkspaces = () => api.get<{ items: OntologyWorkspace[] }>('/workspaces/deleted', platform);

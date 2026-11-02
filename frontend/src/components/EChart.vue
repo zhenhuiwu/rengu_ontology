@@ -6,7 +6,7 @@ import { SVGRenderer } from 'echarts/renderers';
 import { LineChart, BarChart, PieChart } from 'echarts/charts';
 import { GridComponent, TooltipComponent, LegendComponent, MarkLineComponent } from 'echarts/components';
 import VChart from 'vue-echarts';
-import { FONT_FAMILY, GRAY, BRAND } from '@/theme';
+import { FONT_FAMILY, GRAY, colors } from '@/theme';
 
 use([SVGRenderer, LineChart, BarChart, PieChart, GridComponent, TooltipComponent, LegendComponent, MarkLineComponent]);
 
@@ -26,7 +26,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => observer?.disconnect());
 const merged = computed(() => ({
-  color: [BRAND, '#7aa3e5', GRAY.g7],
+  color: [colors.brand, '#7aa3e5', GRAY.g7],
   textStyle: { fontFamily: FONT_FAMILY, fontSize: 12, color: GRAY.g9 },
   animationDuration: 300,
   ...props.option,

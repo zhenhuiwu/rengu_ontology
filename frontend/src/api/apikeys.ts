@@ -18,6 +18,7 @@ export interface RemoteKey extends Omit<ApiKey, 'scopes' | 'binding'> {
   binding: KeyBinding & { serviceAccountId?: string; serviceAccountName?: string; roleId?: string; roleName?: string };
   principalKind?: 'user' | 'service';
   ontologyIds?: number[];
+  version: number;
   actionTypes?: string[] | null;
   eventTypes?: string[] | null;
   functionTypes?: string[] | null;
@@ -48,7 +49,9 @@ export type KeyBindingIn = { kind: '用户'; userId: string } | { kind: '服务�
 export interface KeyCreate extends KeyPolicy {
   name: string; env: '生产' | '测试'; scopes: string[]; binding: KeyBindingIn; lifeDays: number; note: string; ipAllow: string[];
 }
-export interface KeyPatch extends KeyPolicy { scopes?: string[] }
+export interface KeyPatch extends KeyPolicy {
+  version?: number; scopes?: string[]; name?: string; note?: string; ipAllow?: string[]; expiresAt?: string | null;
+}
 export interface ServiceAccount {
   id: string; name: string; description: string; roleId: string; roleName: string; status: '启用' | '已吊销';
   activeKeys: number; creator: string; createdAt: string; revokedAt: string | null; revokedBy: string | null;
@@ -62,6 +65,7 @@ export const apiKeyDetail = (id: string) => api.get<RemoteKey>(`/api-keys/${enc(
 export const apiKeyCalls = (id: string, page: number, size: number) => api.get<PageResult<KeyCall>>(`/api-keys/${enc(id)}/calls`, { query: { page, size } });
 export const createApiKey = (body: KeyCreate) => api.post<RemoteKey & { secret: string }>('/api-keys', body);
 export const updateApiKey = (id: string, body: KeyPatch) => api.patch<RemoteKey>(`/api-keys/${enc(id)}`, body);
+export const rotateApiKey = (id: string, version: number) => api.post<RemoteKey & { secret: string }>(`/api-keys/${enc(id)}:rotate`, { version });
 export const revokeApiKey = (id: string) => api.post<RemoteKey>(`/api-keys/${enc(id)}:revoke`);
 
 export const listServiceAccounts = () => api.get<{ items: ServiceAccount[] }>('/service-accounts');

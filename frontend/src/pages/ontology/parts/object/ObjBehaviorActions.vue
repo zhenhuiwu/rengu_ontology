@@ -88,7 +88,6 @@ const typeCols = [
   { title: '状态', key: 'status', width: 84 },
   { title: '外部系统', key: 'system', width: 100, ellipsis: true },
   { title: '超时 · 幂等', key: 'timeout', width: 100 },
-  { title: '审批', key: 'approval', width: 170, ellipsis: true },
   { title: '驱动的状态迁移', key: 'drives', ellipsis: true },
   { title: '被规则暂存', key: 'usedBy', width: 110, ellipsis: true },
   { title: '近 30 天执行', key: 'runs', width: 380 },
@@ -183,7 +182,6 @@ const recCols = [
             <span v-if="record.sysId" class="num">{{ record.timeout }} · {{ record.idempotent ? '幂等' : '非幂等' }}</span>
             <span v-else class="c-3">--</span>
           </template>
-          <template v-else-if="column.key === 'approval'"><span class="c-2" :title="record.approval">{{ record.approval }}</span></template>
           <template v-else-if="column.key === 'drives'">
             <span v-if="real && !lc" class="c-3">未配置生命周期</span>
             <span v-else-if="drives(record).length" :title="drives(record).map((t) => `${t.id} ${trName(t)}`).join('、')">{{ drives(record).map((t) => `${t.id} ${trName(t)}`).join('、') }}</span>
@@ -211,7 +209,7 @@ const recCols = [
         <span class="t-12 c-2">待确认 <span :class="pendingN ? 'tl-attention' : ''" class="num">{{ pendingN }}</span> · 结果未知待对账 <span :class="unknownN ? 'tl-attention' : ''" class="num">{{ unknownN }}</span></span>
         <span class="ba-sp" />
         <a-select v-model:value="actName" size="small" class="ba-sel" :options="names.map((n) => ({ value: n, label: nameLabel(n) }))" />
-        <a-select v-model:value="status" size="small" class="ba-sel" :options="['全部', ...STATUSES].map((s) => ({ value: s, label: s === '全部' ? '全部状态' : s }))" />
+        <a-select v-model:value="status" size="small" class="ba-sel" :options="['全部', ...STATUSES].map((s) => ({ value: s, label: s === '全部' ? '全部状态' : s === '审批中' ? '历史待处理' : s }))" />
       </div>
       <div class="ba-recs">
         <a-alert v-if="recordsError" type="error" :message="recordsError" show-icon><template #action><a-button size="small" @click="loadRecords">重试</a-button></template></a-alert>
@@ -227,7 +225,7 @@ const recCols = [
             <template v-else-if="column.key === 'source'"><span class="c-2">{{ sourceText(record) }}</span></template>
             <template v-else-if="column.key === 'status'">
               <span v-if="record.status === '结果未知'" class="tl-attention ba-nowrap"><QuestionCircleOutlined /> 结果未知 · 待对账</span>
-              <a-badge v-else :status="badge(record.status)" :text="record.status" />
+              <a-badge v-else :status="badge(record.status)" :text="record.status === '审批中' ? '历史待处理' : record.status" />
             </template>
             <template v-else-if="column.key === 'submittedAt'"><span class="num">{{ record.submittedAt }}</span></template>
           </template>

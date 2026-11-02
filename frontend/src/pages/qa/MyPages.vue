@@ -12,6 +12,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import { fitColumns } from '@/tableColumns';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useReadonly } from '@/composables/useReadonly';
@@ -106,7 +107,7 @@ function patchLive(id: string, patch: Partial<QaPageFull>) {
   if (live.cur?.id === id) Object.assign(live.cur, patch);
 }
 const mockOf = (p: QaPageFull) => pages.find((x) => x.id === p.id);
-const cols = [
+const cols = fitColumns([
   { title: '页面名称', key: 'name', width: 240, ellipsis: true },
   { title: '卡片', key: 'cards', width: 64, align: 'right' },
   { title: '范围', dataIndex: 'scope', key: 'scope', width: 96 },
@@ -118,7 +119,7 @@ const cols = [
   { title: '数据截至', key: 'asof', width: 130 },
   { title: '状态', key: 'status', width: 100 },
   { title: '操作', key: 'op', width: 210 },
-];
+]);
 const caliberText = (p: QaPageFull) => { const s = [...new Set(p.cards.filter(c => c.metric && c.version && c.version !== '--').map((c) => `${c.metric} ${c.version}`))]; return { text: s.join('、') || '未记录指标口径版本', n: s.length }; };
 const shareText = (p: QaPageFull) => (p.share.mode === '仅自己' ? '仅自己' : p.share.mode === '所在部门' ? '所在部门' : `${p.share.members.length} 位成员`);
 const stCls = (s: string) => (s === '刷新失败' ? 'tl-failed' : 'c-2');
@@ -230,7 +231,7 @@ async function loadTpls() {
   try { const r = await pagesApi.listTemplates({ kw: tkw.value || undefined, scene: sceneF.value, page: tq.page.value, size: tq.size.value }); if (my === tseq) live.tpls = r; } catch (e) { if (my === tseq && !qaFallBackIfDown(e)) message.error(`模板库加载失败：${errText(e)}`); }
 }
 watch([qaWriteReal, tab, tkw, sceneF, tq.page, tq.size, pageContextKey], loadTpls, { immediate: true });
-const tcols = [
+const tcols = fitColumns([
   { title: '模板名称', key: 'name', width: 200 },
   { title: '场景', dataIndex: 'scene', key: 'scene', width: 96 },
   { title: '卡片', key: 'cards', width: 64, align: 'right' },
@@ -239,7 +240,7 @@ const tcols = [
   { title: '使用次数', key: 'uses', width: 96, align: 'right' },
   { title: '更新时间', key: 'updatedAt', width: 110 },
   { title: '操作', key: 'op', width: 170 },
-];
+]);
 const tplCur = computed(() => qaWriteReal.value ? live.tpls?.items.find((t) => t.id === q('tpl')) : PAGE_TEMPLATES.find((t) => t.id === q('tpl')));
 const openTpl = (t: QaTemplate) => setQuery({ tpl: t.id, page_id: undefined, ptab: undefined });
 async function templateCreated(id: string) { setQuery({ tab: undefined, tpl: undefined, page_id: id, ptab: 'preview' }); await loadList(); await loadTpls(); }
@@ -304,7 +305,7 @@ const cutoff = computed(() => {
         <span v-else class="t-12 c-3 mp-hint">{{ fromWb }} 个页面由问数工作台“固定到页面”生成</span>
       </div>
       <div class="mp-table" :class="{ 'paged-scroll': pq.overflow.value }">
-        <a-table size="small" row-key="id" :columns="cols" :data-source="paged.items" :pagination="false" :scroll="{ x: 1660 }" :custom-row="rowProps">
+        <a-table size="small" row-key="id" :columns="cols" :data-source="paged.items" :pagination="false" :custom-row="rowProps">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
               <a-popover :open="renameId === record.id" trigger="click" placement="bottomLeft" @open-change="(o: boolean) => { if (!o) renameId = undefined; }">

@@ -5,7 +5,7 @@ import { reviewFields } from '@/pages/ops/actionReview';
  * 布局：会话列表 | 对话（唯一滚动区）+ 输入框 | 当前对象与可执行动作。
  * 抽屉用公共 DetailDrawer：?drawer=region:REG-EC；确认卡用公共 ConfirmActionModal，打开时 URL 带 ?confirm=1，可直接复现截图。
  * 其余可复现状态：?pin=1 固定到页面弹窗；?panel=favorites|pages 左下抽屉；?apply=1 申请权限抽屉。
- * 答案里的“建议动作”与右栏动作走同一张确认卡，并高亮右栏那一行；动作状态只在右栏显示。
+ * 答案里的动作在当前页确认，真实执行状态回显到原对话；右栏仅展示演示动作。
  * 范围/口径是会话级的：中途修改在对话里插入“从这里开始按 … 回答”，之前的答案保留各自依据。
  */
 import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue';
@@ -36,7 +36,7 @@ const router = useRouter();
 const drawer = useDrawer();
 const confirm = useConfirmStore();
 const submitted = ref(false);
-/** 真接口：本次提交的 action_run，右栏「待审批」可跳动作中心 */
+/** 演示右栏引用的本次 action_run。 */
 const submittedRun = ref<{ id: string; approver: string | null }>();
 const pending = computed(() => confirm.open && confirm.req?.title === ACTION);
 const pinQ = useQueryParam('pin', '');
@@ -60,32 +60,45 @@ const caliber = ref('');
 const tips = ref<string[]>([]);
 const sess = useQaSession();
 const actionRuns = ref<Record<string, qaApi.QaActionRun>>({});
+const actionIssues = ref<Record<string, string>>({});
 let actionContext = '';
-watch(() => [metaContextKey(), sess.activeId.value, ...(sess.detail.value?.turns ?? []).map((t) => t.kind === 'answer' && t.answer.card === 'action' ? `${t.id}:${t.answer.action.runId ?? ''}` : '')].join('|'), async () => {
+async function restoreActions() {
   const context = `${metaContextKey()}|${sess.activeId.value}`;
-  if (context !== actionContext) { actionContext = context; actionRuns.value = {}; }
+  if (context !== actionContext) { actionContext = context; actionRuns.value = {}; actionIssues.value = {}; }
   const turns = sess.detail.value?.turns ?? [];
   await Promise.all(turns.map(async (t) => {
     if (t.kind !== 'answer' || t.answer.card !== 'action' || !t.answer.action.runId || actionRuns.value[t.id]) return;
     try {
       const run = await qaApi.getAction(t.answer.action.runId);
-      if (actionContext === context && !actionRuns.value[t.id]) actionRuns.value[t.id] = run;
+      if (actionContext === context && !actionRuns.value[t.id]) rememberAction(t.id, run);
     } catch { /* 原记录不可见或服务不可用时，不猜测执行状态。 */ }
   }));
-}, { immediate: true });
+}
+watch(() => [metaContextKey(), sess.activeId.value, ...(sess.detail.value?.turns ?? []).map((t) => t.kind === 'answer' && t.answer.card === 'action' ? `${t.id}:${t.answer.action.runId ?? ''}` : '')].join('|'), restoreActions, { immediate: true });
 function rememberAction(turnId: string | undefined, run: qaApi.QaActionRun) {
+  turnId ??= sess.detail.value?.turns.find((t) => t.kind === 'answer' && t.answer.card === 'action' && t.answer.action.runId === run.id)?.id;
   if (!turnId) return;
   const turn = sess.detail.value?.turns.find((t) => t.id === turnId);
-  if (turn?.kind === 'answer' && turn.answer.card === 'action') turn.answer.action.runId = run.id;
+  if (turn?.kind !== 'answer' || turn.answer.card !== 'action') return;
+  turn.answer.action.runId = run.id;
+  if (sess.real && run.paramsUnavailable) {
+    actionIssues.value[turnId] = `原动作参数不可用：${run.paramsUnavailable}，已阻止提交。`;
+  } else if (sess.real && !matchesAction(run, turn.answer.action)) {
+    actionIssues.value[turnId] = run.alertId === undefined
+      ? '原动作记录未提供告警上下文，无法确认属于本次动作，已阻止提交。'
+      : '原动作记录的类型、目标、参数或告警与当前动作卡不一致，已阻止提交。请重新提问并核对。';
+  } else delete actionIssues.value[turnId];
   actionRuns.value[turnId] = run;
 }
 async function refreshAction(turnId: string, quiet = false) {
   const current = actionRuns.value[turnId];
-  if (!current) return;
+  const turn = sess.detail.value?.turns.find((t) => t.id === turnId);
+  const runId = current?.id ?? (turn?.kind === 'answer' && turn.answer.card === 'action' ? turn.answer.action.runId : undefined);
+  if (!runId) return;
   const context = actionContext;
   try {
-    const run = await qaApi.getAction(current.id);
-    if (context === actionContext && actionRuns.value[turnId] === current) actionRuns.value[turnId] = run;
+    const run = await qaApi.getAction(runId, qaApi.qaRequestOptions());
+    if (context === actionContext && actionRuns.value[turnId] === current) rememberAction(turnId, run);
   } catch (e) { if (!quiet && context === actionContext) message.error(`读取动作状态失败：${errText(e)}`); }
 }
 let actionTimer: ReturnType<typeof setInterval> | undefined;
@@ -124,7 +137,11 @@ if (sess.real) {
   watch(() => sess.detail.value, (d) => { if (d) fromSession(d); });
   watch([metaContextKey, () => sess.activeId.value], () => { ++scopeSeq; });
   const q = route.query.session;
-  if (typeof q === 'string' && q && !sess.activeId.value) sess.activeId.value = q;
+  if (typeof q === 'string' && q) sess.activeId.value = q;
+  watch(sess.activeId, id => {
+    if ((route.query.session ?? '') === id) return;
+    router.replace({ query: { ...route.query, session: id || undefined } });
+  }, { immediate: true });
 }
 const canOrganize = computed(() => !readonly.value && (!sess.real || !!sess.detail.value?.turns.some((turn) => (turn as typeof turn & { pinnable?: boolean }).pinnable)));
 function toPage(intent: 'preview' | 'share' = 'preview') {
@@ -169,7 +186,7 @@ const ACTION_TARGET = { kind: '客户群', id: 'SEG-EC-60D', label: '华东大�
 function actionFields(run?: qaApi.QaActionRun) {
   if (sess.real && run) return [
     { label: '动作类型', value: `${run.action} ${run.typeVersion ?? ''}`.trim() },
-    { label: '目标', value: run.objLabel ?? '—' }, { label: '参数', value: run.params ?? '—' },
+    { label: '目标', value: [run.objKind, run.objLabel, run.objId].filter(Boolean).join(' · ') || '—' }, { label: '参数', value: run.paramsUnavailable || run.params || '—' },
     { label: '执行位置', value: run.system ?? '本体内部' },
     { label: '幂等键', value: run.idemKey },
     ...reviewFields(run),
@@ -184,71 +201,101 @@ function actionFields(run?: qaApi.QaActionRun) {
     { label: '幂等键', value: run ? run.idemKey : 'act-20261025-ec-0193' },
   ];
 }
-const staging = ref(false);
-/** suggest：链路动作意图（只建议 + dry-run）；确认卡确认后才走动作中心 stage → confirm，问数从不自动执行 */
+const actionBusy = ref(false);
+function normalizedParams(params: string | null) {
+  if (!params?.trim()) return null;
+  try {
+    const parsed = JSON.parse(params);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !Object.keys(parsed).length) return null;
+    return JSON.stringify(parsed, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value);
+  } catch { return params; }
+}
+function matchesAction(run: qaApi.QaActionRun, action: qaApi.QaActionSuggest) {
+  const expected = action.stage;
+  return run.typeId === expected.typeId && (run.objKind || null) === (expected.objKind || null) && run.objId === expected.objId
+    && normalizedParams(run.params) === normalizedParams(action.params == null ? expected.params : JSON.stringify(action.params))
+    && run.alertId !== undefined && run.alertId === (action.decision?.alertId ?? null);
+}
+/** stage 只保存待确认记录；人工确认后，confirm 按已发布策略提交执行，不另发执行请求。 */
 async function runAction(reuseId?: string, suggest?: qaApi.QaActionSuggest, turnId?: string) {
-  if (readonly.value || staging.value) return;
+  if (readonly.value || actionBusy.value) return;
   const context = `${metaContextKey()}|${sess.activeId.value}`;
   if (sess.real && !reuseId && !suggest) { message.warning('问答动作尚未绑定真实目标，请在动作中心操作'); return; }
   if (suggest && (suggest.canStage === false || !turnId)) { message.warning('该动作执行策略只给建议，不能从问数发起'); return; }
+  if (sess.real && suggest && !suggest.runId && suggest.stageVersion !== 1) { message.warning('历史动作卡无法确认是否已执行，请重新提问后发起'); return; }
   if (suggest && !suggest.stage.objId) { message.warning('动作缺少目标对象，请在问题里指明对象后重新提问'); return; }
-  let run: qaApi.QaActionRun | undefined;
-  if (qaApi.actionsReal() && reuseId) {
-    // 刷新带 ?confirm=1&run= 的页面：复用已暂存的动作；它已确认 / 撤回就不再弹卡，也不新建（不留孤儿记录）
-    try {
-      const r = await qaApi.getAction(reuseId);
-      if (r.can?.confirm ?? r.status === '待确认') run = r;
-    } catch { /* 取不到就当已失效 */ }
-    if (!run) { setConfirmQuery(false); return; }
-  } else if (suggest && !qaApi.actionsReal()) {
-    message.warning('动作中心未切到真接口，无法提交');
-    return;
-  } else if (qaApi.actionsReal()) {
-    // X1：打开确认卡前先暂存，确认卡上显示服务端生成的幂等键
-    staging.value = true;
-    try {
-      const d = sess.detail.value;
-      const source = { type: '问数' as const, session: d?.id, sessionTitle: d?.title };
-      run = suggest && turnId
-        ? await qaApi.stageTurnAction(turnId)
-        : await qaApi.stageAction({ action: ACTION, source, objKind: ACTION_TARGET.kind, objId: ACTION_TARGET.id, objLabel: ACTION_TARGET.label, params: ACTION_PARAMS });
-    } catch (e) { message.error(`发起失败：${errText(e)}`); return; } finally { staging.value = false; }
-  }
-  if (context !== `${metaContextKey()}|${sess.activeId.value}`) return;
-  if (run) {
-    rememberAction(turnId, run);
-    if (run.status !== '待确认' || run.can?.confirm === false) { message.info(run.can?.reasons?.confirm || `动作 ${run.id}：${run.status}`); return; }
-  }
-  setConfirmQuery(true, run?.id);
-  const ok = await confirm.ask({
-    title: run?.action ?? ACTION,
-    tag: '待确认',
-    target: run?.objLabel ?? (sess.real ? '—' : `${ACTION_TARGET.kind} · ${ACTION_TARGET.label}`),
-    fields: actionFields(run),
-    impact: run?.system ? '确认后执行；外部结果未知时需先对账。' : '确认后执行，结果会显示在当前对话中。',
-    irreversible: !run || !!run.system,
-    okText: '确认并执行',
-  });
-  setConfirmQuery(false);
-  if (context !== `${metaContextKey()}|${sess.activeId.value}`) return;
-  if (!run) { if (ok) { submitted.value = true; message.success('演示动作已确认'); } return; }
+  if (suggest && !reuseId && !suggest.runId && suggest.dryRun?.passed === false) { message.warning('动作校验未通过，请核对条件后重新提问'); return; }
+  const options = qaApi.qaRequestOptions();
+  actionBusy.value = true;
   try {
-    if (ok) {
-      // X2：有审批人 → 待审批；没有 → 执行中
-      const r = await qaApi.confirmAction(run.id);
-      if (context !== `${metaContextKey()}|${sess.activeId.value}`) return;
-      rememberAction(turnId, r);
-      submitted.value = true; submittedRun.value = { id: r.id, approver: r.approver };
-      message.success(`已确认（${r.status}）`);
-    } else {
-      // X2b：确认卡取消 → 已撤回 [推断]
-      const r = await qaApi.withdrawAction(run.id);
-      if (context === `${metaContextKey()}|${sess.activeId.value}`) rememberAction(turnId, r);
+    let run: qaApi.QaActionRun | undefined;
+    const runId = reuseId ?? suggest?.runId;
+    if (qaApi.actionsReal() && runId) {
+      // 重试和刷新只读取原记录，不能重新 stage 或根据旧卡片猜测是否已执行。
+      try { run = await qaApi.getAction(runId, options); }
+      catch (e) { if (context === `${metaContextKey()}|${sess.activeId.value}`) { message.error(`读取动作状态失败：${errText(e)}`); setConfirmQuery(false); } return; }
+    } else if (suggest && !qaApi.actionsReal()) {
+      message.warning('动作中心未切到真接口，无法提交');
+      return;
+    } else if (qaApi.actionsReal()) {
+      // X1：打开确认卡前先暂存，确认卡上显示服务端生成的幂等键
+      try {
+        const d = sess.detail.value;
+        const source = { type: '问数' as const, session: d?.id, sessionTitle: d?.title };
+        run = suggest && turnId
+          ? await qaApi.stageTurnAction(turnId, {}, options)
+          : await qaApi.stageAction({ action: ACTION, source, objKind: ACTION_TARGET.kind, objId: ACTION_TARGET.id, objLabel: ACTION_TARGET.label, params: ACTION_PARAMS }, options);
+      } catch (e) { if (context === `${metaContextKey()}|${sess.activeId.value}`) message.error(`发起失败：${errText(e)}`); return; }
     }
-  } catch (e) {
-    try { const r = await qaApi.getAction(run.id); if (context === `${metaContextKey()}|${sess.activeId.value}`) rememberAction(turnId, r); } catch { /* 保留已知状态，避免猜测结果。 */ }
-    if (context === `${metaContextKey()}|${sess.activeId.value}`) message.error(`${ok ? '提交' : '撤回'}失败：${errText(e)}`);
-  }
+    if (context !== `${metaContextKey()}|${sess.activeId.value}`) return;
+    if (run) {
+      const originalTurn = sess.detail.value?.turns.find((t) => t.kind === 'answer' && t.answer.card === 'action' && t.answer.action.runId === run?.id);
+      turnId ??= originalTurn?.id;
+      rememberAction(turnId, run);
+      if (sess.real && (!turnId || actionIssues.value[turnId])) {
+        const issue = turnId ? actionIssues.value[turnId] : '已恢复原动作状态，请从原对话动作卡核对目标和参数后确认。';
+        setConfirmQuery(false); message.warning(issue); return;
+      }
+      if (run.status !== '待确认' || run.can?.confirm !== true) { setConfirmQuery(false); message.info(run.can?.reasons?.confirm || `动作 ${run.id}：${run.status}`); return; }
+      const card = suggest ?? (originalTurn?.kind === 'answer' && originalTurn.answer.card === 'action' ? originalTurn.answer.action : undefined);
+      if (card?.dryRun?.passed === false) { setConfirmQuery(false); message.warning('动作校验未通过，请核对条件后重新提问'); return; }
+    }
+    setConfirmQuery(true, run?.id);
+    const ok = await confirm.ask({
+      title: run?.action ?? ACTION,
+      tag: '待确认',
+      target: run?.objLabel ?? (sess.real ? '—' : `${ACTION_TARGET.kind} · ${ACTION_TARGET.label}`),
+      fields: actionFields(run),
+      impact: `确认后按已发布策略提交执行。${run?.system ? '外部结果未知时需先对账。' : '结果会显示在当前对话中。'}`,
+      irreversible: !run || !!run.system,
+      okText: '确认并执行',
+    });
+    if (context !== `${metaContextKey()}|${sess.activeId.value}`) return;
+    setConfirmQuery(false);
+    if (readonly.value) return;
+    if (!run) { if (ok) { submitted.value = true; message.success('演示动作已确认'); } return; }
+    try {
+      if (ok) {
+        // X2 已包含执行提交；需审批时保留审批中，不自动 approve。
+        const r = await qaApi.confirmAction(run.id, options);
+        if (context !== `${metaContextKey()}|${sess.activeId.value}`) return;
+        rememberAction(turnId, r);
+        if (turnId && actionIssues.value[turnId]) { message.warning(actionIssues.value[turnId]); return; }
+        submitted.value = true; submittedRun.value = { id: r.id, approver: r.approver };
+        if (r.status === '成功') message.success('动作执行成功');
+        else if (r.status === '失败' || r.status === '结果未知') message.warning(`动作${r.status}，请查看当前对话中的状态`);
+        else message.info(`已提交（${r.status}），结果会显示在当前对话中`);
+      } else {
+        // X2b：确认卡取消 → 已撤回 [推断]
+        const r = await qaApi.withdrawAction(run.id, '确认卡取消', options);
+        if (context === `${metaContextKey()}|${sess.activeId.value}`) rememberAction(turnId, r);
+      }
+    } catch (e) {
+      try { const r = await qaApi.getAction(run.id, options); if (context === `${metaContextKey()}|${sess.activeId.value}`) rememberAction(turnId, r); } catch { /* 保留已知状态，避免猜测结果。 */ }
+      if (context === `${metaContextKey()}|${sess.activeId.value}`) message.error(`${ok ? '提交' : '撤回'}请求未确认：${errText(e)}，请核对原动作状态`);
+    }
+  } finally { actionBusy.value = false; }
 }
 
 onMounted(() => {
@@ -268,7 +315,7 @@ onMounted(() => {
     <QaSessionPanel @panel="(v) => (panel = v)" />
     <section class="panel qa-center">
       <div v-if="pv.active.value" class="qa-pv t-12 c-2">{{ pv.userName.value }} 的数据范围：{{ pvText }}。回答只含范围内的数据，预览中不能追问和发起动作。</div>
-      <QaConversation :applied="applied" :tips="tips" :action-runs="actionRuns" @refresh-action="(tid: string) => refreshAction(tid)" @suggest="(a?: qaApi.QaActionSuggest, tid?: string) => runAction(undefined, a, tid)" @pin="openPin" @apply="openApply" />
+      <QaConversation :applied="applied" :tips="tips" :action-runs="actionRuns" :action-issues="actionIssues" :action-busy="actionBusy" @refresh-action="(tid: string) => refreshAction(tid)" @suggest="(a?: qaApi.QaActionSuggest, tid?: string) => runAction(undefined, a, tid)" @pin="openPin" @apply="openApply" />
       <QaComposer v-model:scope="scope" v-model:caliber="caliber" />
     </section>
     <QaObjectPanel v-if="!sess.real" :pending="pending" :submitted="submitted" :run="submittedRun" :highlight="highlight" @run="runAction()" @detail="drawer.open('region', REGION_EC.id)" />

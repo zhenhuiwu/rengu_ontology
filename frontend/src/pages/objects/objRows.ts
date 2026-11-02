@@ -33,7 +33,7 @@ const MOCK_BINDINGS: Record<string, MockBinding> = {
 };
 
 export interface RowsQuery { kw: string; filters: Filters; sort: string; page: number; size: number; withFacets?: boolean }
-export interface RowsResult { items: ExploreRow[]; total: number; page?: number; bound: boolean; boundProps: string[]; facets: FacetMeta[]; canExport?: boolean }
+export interface RowsResult { items: ExploreRow[]; total: number; page?: number; bound: boolean; boundProps: string[]; facets: FacetMeta[]; canExport?: boolean; mirrorCompleteness?: 'partial' | 'full' | null }
 /** 预览的行级范围（mock 用）：null = 不限 */
 export type ScopeFn = (typeName: string) => string | null;
 
@@ -82,12 +82,12 @@ function sortRows(rows: ExploreRow[], sort: string) {
 }
 
 /** 搜索一页；live=true 走 X1，真实错误直接交给调用方，仅显式 mock 模式本地计算。 */
-export async function searchRows(m: TypeMeta, q: RowsQuery, live: boolean, scope: ScopeFn): Promise<RowsResult> {
+export async function searchRows(m: TypeMeta, q: RowsQuery, live: boolean, scope: ScopeFn, signal?: AbortSignal): Promise<RowsResult> {
   if (live) {
     const needFacets = q.withFacets !== false;
     // One request uses the same source, version, keyword and row predicate for rows and facets.
-    const result = await exploreSearch(m.id, { kw: q.kw, filters: q.filters, sort: q.sort || undefined, page: q.page, size: q.size, withFacets: needFacets });
-    return { items: result.items, total: result.total, page: result.page, bound: result.bound, boundProps: result.boundProps, facets: result.facets, canExport: result.canExport };
+    const result = await exploreSearch(m.id, { kw: q.kw, filters: q.filters, sort: q.sort || undefined, page: q.page, size: q.size, withFacets: needFacets }, signal);
+    return { items: result.items, total: result.total, page: result.page, bound: result.bound, boundProps: result.boundProps, facets: result.facets, canExport: result.canExport, mirrorCompleteness: result.mirrorCompleteness };
   }
   const all = mockAll(m, scope);
   if (!all) return { items: [], total: 0, bound: false, boundProps: [], facets: [] };
@@ -101,11 +101,11 @@ export async function searchRows(m: TypeMeta, q: RowsQuery, live: boolean, scope
 export function mockMatched(m: TypeMeta, q: Pick<RowsQuery, 'kw' | 'filters'>, scope: ScopeFn): ExploreRow[] {
   return (mockAll(m, scope) ?? []).filter((r) => hit(m, r, q));
 }
-export type GetResult = { row: ExploreRow | null; bound: boolean; denied: boolean };
+export type GetResult = { row: ExploreRow | null; bound: boolean; denied: boolean; mirrorCompleteness?: 'partial' | 'full' | null };
 /** 单个对象；不存在 row=null，范围外 denied=true，未接入 bound=false */
 export async function getRow(m: TypeMeta, id: string, live: boolean, scope: ScopeFn): Promise<GetResult> {
   if (live) {
-    try { return { row: await exploreGet(m.id, id), bound: true, denied: false }; } catch (e: any) {
+    try { const row = await exploreGet(m.id, id); return { row, bound: true, denied: false, mirrorCompleteness: row.mirrorCompleteness }; } catch (e: any) {
       if (e?.status === 403) return { row: null, bound: true, denied: true };
       if (e?.status === 404) {
         return { row: null, bound: m.hasData !== false, denied: false };

@@ -1,16 +1,20 @@
 <script setup lang="ts">
 /** 悬停卡：只读预览一个对象。<HoverCard kind="store" id="SH0031">上海浦东张江高科店</HoverCard> */
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { resolveObject } from './objectRegistry';
+import { usesRealObject } from './realObjectResolver';
 
 const props = withDefaults(defineProps<{ kind: string; id: string; underline?: boolean }>(), { underline: true });
-const view = computed(() => resolveObject(props.kind, props.id));
+const open = ref(false);
+const real = computed(() => usesRealObject(props.kind));
+const view = computed(() => !real.value || open.value ? resolveObject(props.kind, props.id) : null);
+watch([() => props.kind, () => props.id], () => { open.value = false; });
 </script>
 
 <template>
-  <a-popover v-if="view" placement="bottomLeft" :mouse-enter-delay="0.3" :overlay-inner-style="{ padding: 0 }">
+  <a-popover v-if="real || view" v-model:open="open" placement="bottomLeft" :mouse-enter-delay="0.3" :overlay-inner-style="{ padding: 0 }">
     <template #content>
-      <div class="hc">
+      <div v-if="view" class="hc">
         <div class="hc-head">
           <span class="t-14 fw-600 c-1 hc-title" :title="`${view.title} · ${view.kindLabel} · ${view.code}`">{{ view.title }}<span class="fw-400 c-2 num"> · {{ view.code }}</span></span>
           <a-tag v-if="view.status" :color="view.status.color" class="hc-tag">{{ view.status.text }}</a-tag>
@@ -23,7 +27,7 @@ const view = computed(() => resolveObject(props.kind, props.id));
         </dl>
       </div>
     </template>
-    <span :class="{ 'hc-trigger': props.underline }"><slot>{{ view.title }}</slot></span>
+    <span :class="{ 'hc-trigger': props.underline }"><slot>{{ view?.title ?? props.id }}</slot></span>
   </a-popover>
   <span v-else><slot /></span>
 </template>

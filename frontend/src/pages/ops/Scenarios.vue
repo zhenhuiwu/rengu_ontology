@@ -21,7 +21,7 @@ import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { paginate } from '@/mock/paginate';
-import { BRAND, GRAY } from '@/theme';
+import { colors, GRAY } from '@/theme';
 import { stageAction } from '@/mock/actions';
 import {
   SCENARIOS, scenarioById, nextScenarioId, fmtPct,
@@ -302,7 +302,7 @@ const lineOpt = computed(() => {
     yAxis: { type: 'value', name: ser.value.unit, splitLine: { lineStyle: { color: GRAY.g4 } } },
     series: [
       { name: `基线${ser.value.label}`, type: 'line', data: serOf(r, ser.value.baseKey), lineStyle: { type: 'dashed', color: GRAY.g7 }, itemStyle: { color: GRAY.g7 }, symbol: 'none' },
-      { name: `方案${ser.value.label}`, type: 'line', data: serOf(r, ser.value.valueKey), itemStyle: { color: BRAND }, symbol: 'circle', symbolSize: 5 },
+      { name: `方案${ser.value.label}`, type: 'line', data: serOf(r, ser.value.valueKey), itemStyle: { color: colors.brand }, symbol: 'circle', symbolSize: 5 },
     ],
   };
 });
@@ -333,13 +333,13 @@ const scopeLabels = computed(() => cmpTpl.value.scope.map((f) => f.label).join('
 const cfgOf = (s: Scenario) => s.drivers as unknown as ScCfg;
 const cmpRowText = (r: ScTemplate['compareRows'][number], s: Scenario) => (r.offKey && cfgOf(s)[r.offKey] === allFields(cmpTpl.value).find((f) => f.key === r.offKey)?.default
   ? r.offText ?? '' : fillText(r.text, cfgOf(s)));
-const CMP_COLORS = [BRAND, GRAY.g9, GRAY.g7];
+const cmpColor = (index: number) => [colors.brand, GRAY.g9, GRAY.g7][index];
 const barOpt = computed(() => ({
   tooltip: { trigger: 'axis', valueFormatter: (v: number) => `${v}%` }, legend: { top: 0, right: 0, itemWidth: 14 },
   grid: { left: 44, right: 12, top: 28, bottom: 24 },
   xAxis: { type: 'category', data: cmpTpl.value.kpis.filter((k) => k.chart).map((k) => k.short ?? k.label) },
   yAxis: { type: 'value', name: '较基线 %', splitLine: { lineStyle: { color: GRAY.g4 } } },
-  series: cmpList.value.map((s, i) => ({ name: s.id, type: 'bar', barMaxWidth: 18, itemStyle: { color: CMP_COLORS[i] },
+  series: cmpList.value.map((s, i) => ({ name: s.id, type: 'bar', barMaxWidth: 18, itemStyle: { color: cmpColor(i) },
     data: cmpTpl.value.kpis.filter((k) => k.chart).map((k) => { const x = kpiOf(s, k.key); return +(((x.value - x.base) / x.base) * 100).toFixed(1); }) })),
 }));
 const cmpLineOpt = computed(() => {
@@ -351,7 +351,7 @@ const cmpLineOpt = computed(() => {
     yAxis: { type: 'value', name: ser.value.unit, splitLine: { lineStyle: { color: GRAY.g4 } } },
     series: [
       ...(base && !scopeDiff.value ? [{ name: '基线', type: 'line', symbol: 'none', data: serOf(base, ser.value.baseKey), lineStyle: { type: 'dashed', color: GRAY.g6 }, itemStyle: { color: GRAY.g6 } }] : []),
-      ...cmpList.value.map((s, i) => ({ name: s.id, type: 'line', symbolSize: 4, itemStyle: { color: CMP_COLORS[i] }, data: serOf(s.result!, ser.value.valueKey) })),
+      ...cmpList.value.map((s, i) => ({ name: s.id, type: 'line', symbolSize: 4, itemStyle: { color: cmpColor(i) }, data: serOf(s.result!, ser.value.valueKey) })),
     ],
   };
 });

@@ -15,6 +15,7 @@ watch(() => store.open, (v) => { if (v) ack.value = false; });
 <template>
   <a-modal
     :open="store.open"
+    :z-index="1100"
     :width="520"
     :mask-closable="false"
     :ok-text="store.req?.okText ?? '确认执行'"
@@ -40,7 +41,7 @@ watch(() => store.open, (v) => { if (v) ack.value = false; });
         />
       </div>
       <a-alert v-if="store.req.blocked" type="error" show-icon class="ca-blocked" :message="store.req.blocked" />
-      <a-checkbox v-if="store.req.irreversible" v-model:checked="ack">此操作会写回业务系统，提交后不能撤销</a-checkbox>
+      <a-checkbox v-if="store.req.irreversible" v-model:checked="ack">{{ store.req.dangerLabel ?? '此操作会写回业务系统，提交后不能撤销' }}</a-checkbox>
     </template>
   </a-modal>
 </template>

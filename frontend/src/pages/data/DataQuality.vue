@@ -4,6 +4,7 @@ import { useConfirmStore } from '@/stores/confirm';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import { fitColumns } from '@/tableColumns';
 import AppPagination from '@/components/AppPagination.vue';
 import { fetchCurrentAfterWrite } from '@/api/static';
 import InfoTip from '@/components/InfoTip.vue';
@@ -60,13 +61,13 @@ async function loadList() {
   } catch (e) { if (seq === listSeq && key === listKey()) state.error = errorText(e); }
   finally { if (seq === listSeq && key === listKey()) state.loading = false; }
 }
-const cols = [
+const cols = fitColumns([
   { title: '编号', dataIndex: 'id', key: 'id', width: 160 }, { title: '对象类型', key: 'type', width: 110 },
   { title: '检查', dataIndex: 'kind', key: 'kind', width: 90 }, { title: '规则', dataIndex: 'rule', key: 'rule', width: 180, ellipsis: true },
   { title: '阈值', dataIndex: 'threshold', key: 'threshold', width: 110 }, { title: '最近结果', key: 'actual', width: 260, ellipsis: true },
   { title: '结果', key: 'result', width: 80 },
   ...(real ? [{ title: '调度', key: 'schedule', width: 170 }, { title: '定义状态', key: 'definition', width: 150 }, { title: '操作', key: 'edit', width: 100 }] : []), { title: '最近运行', key: 'lastRun', width: 140 },
-];
+]);
 const selected = computed(() => checks.value.find((c) => c.id === q('check')) ?? rows.value[0]);
 const HSIZE = 10; const hpage = ref(1);
 const history = reactive<{ key: string; items: QualityRun[]; total: number; error: string }>({ key: '', items: [], total: 0, error: '' });
@@ -213,7 +214,7 @@ async function saveDefinition() {
           </a-radio-group>
         </div>
         <div class="dq-table" :class="{ 'paged-scroll': pq.overflow.value }">
-          <a-table size="small" row-key="id" :loading="state.loading" :columns="cols" :data-source="paged.items" :pagination="false" :custom-row="rowProps" :scroll="{ x: real ? 1550 : 1130 }" table-layout="fixed">
+          <a-table size="small" row-key="id" :loading="state.loading" :columns="cols" :data-source="paged.items" :pagination="false" :custom-row="rowProps" table-layout="fixed">
             <template #bodyCell="{ column, record }">
               <template v-if="real && column.key === 'schedule'">
                 <div>{{ record.schedule }} · {{ record.scheduleStatus }}</div>

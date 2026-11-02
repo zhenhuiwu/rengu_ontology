@@ -389,11 +389,12 @@ watch(() => props.page?.name, (name) => { if (name === newName.value.trim()) ren
 
 <style scoped>
 .pd { display: flex; flex-direction: column; gap: 8px; }
-.pd-meta { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px 16px; }
+.pd-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 16px; }
+.pd-meta > div { min-width: 0; overflow-wrap: anywhere; }
 .pd-ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .pd-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .pd-sp { flex: 1; }
-.pd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pd-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .pd-edit { display: flex; flex-direction: column; gap: 6px; }
 .pd-erow { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 8px; border: var(--border); border-radius: var(--radius); cursor: grab; }
 .pd-erow .pd-ell { flex: 1; }

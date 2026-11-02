@@ -6,13 +6,9 @@
 import { computed, reactive, ref, shallowRef, watch, onBeforeUnmount } from 'vue';
 import { currentApiContext } from '@/api/http';
 import { useRoute, useRouter } from 'vue-router';
-import HoverCard from '@/components/HoverCard.vue';
-import EChart from '@/components/EChart.vue';
 import AppPagination from '@/components/AppPagination.vue';
-import { GRAY, BRAND } from '@/theme';
-import { DAILY_GMV, fmtMoney } from '@/mock';
 import { METRIC_LIST as MOCK_LIST, METRIC_DEF, METRIC_DIMS, METRIC_VERSIONS, METRIC_REFS, type MetricListItem as M } from '@/mock/metricCatalog';
-import { isStaticReal, fetchMetricGroups, staticContextKey, fetchStaticDetail, rollbackMetric, trialMetric, fetchMetricReadiness, crErr, type MetricTrialResult, type MetricTrialReadiness } from '@/api/static';
+import { isStaticReal, fetchMetricGroups, staticContextKey, fetchStaticDetail, rollbackMetric } from '@/api/static';
 import DraftBanner from './parts/DraftBanner.vue';
 import StartChangeModal from './parts/StartChangeModal.vue';
 import DefinitionEditor from './parts/DefinitionEditor.vue';
@@ -48,7 +44,7 @@ const route = useRoute();
 const router = useRouter();
 const selected = computed(() => (route.query.metric as string) || (isStaticReal() ? firstId.value : 'gmv'));
 const tab = computed({
-  get: () => (route.query.tab as string) || 'def',
+  get: () => typeof route.query.tab === 'string' && ['def', 'dims', 'versions', 'refs'].includes(route.query.tab) ? route.query.tab : 'def',
   set: (v) => router.replace({ query: { ...route.query, tab: v } }),
 });
 const pick = (id: string) => router.replace({ query: { ...route.query, metric: id, view: undefined } });
@@ -188,69 +184,6 @@ const DENY = [
 ];
 
 
-const trend = (isStaticReal() ? [] : DAILY_GMV).map((d) => ({ date: d.date, value: Math.round((d.value / 1.13) * 100) / 100 }));
-const trialResult = shallowRef<MetricTrialResult>();
-const trialBusy = ref(false), trialError = ref('');
-const trialReadiness = shallowRef<MetricTrialReadiness>(), readinessError = ref('');
-const manualTrialDays = ref<number | null>();
-const trialDays = computed({
-  get: () => {
-    if (manualTrialDays.value !== undefined) return manualTrialDays.value;
-    const fields = isDraft.value ? draftFields(cr.items.value, 'def') : {};
-    const range = ('defaultRange' in fields ? fields.defaultRange : rawDefinition.value.execDef?.defaultRange) as { kind?: string; days?: number } | null | undefined;
-    return range?.kind === 'rolling_days' && Number.isInteger(range.days) && Number(range.days) >= 1 && Number(range.days) <= 93 ? Number(range.days) : 30;
-  },
-  set: (value: number | null | undefined) => { manualTrialDays.value = value ?? null; },
-});
-const validTrialDays = computed(() => typeof trialDays.value === 'number' && Number.isInteger(trialDays.value) && trialDays.value >= 1 && trialDays.value <= 93);
-watch(() => JSON.stringify([staticContextKey(), selected.value, route.query.view]), () => { manualTrialDays.value = undefined; }, { flush: 'sync' });
-let trialSeq = 0;
-let readinessSeq = 0;
-const trialKey = () => JSON.stringify([staticContextKey(), selected.value, isDraft.value, draft.value?.id, cr.head.value?.lockVersion, trialDays.value]);
-watch(trialKey, () => { ++trialSeq; trialResult.value = undefined; trialError.value = ''; trialBusy.value = false; void loadReadiness(); }, { immediate: true });
-onBeforeUnmount(() => { ++trialSeq; ++readinessSeq; });
-async function loadReadiness() {
-  const seq = ++readinessSeq, key = trialKey();
-  trialReadiness.value = undefined; readinessError.value = '';
-  if (!isStaticReal() || !selected.value || (isDraft.value && (!cr.head.value || cr.loading.value || cr.error.value))) return;
-  try {
-    const result = await fetchMetricReadiness(selected.value, isDraft.value ? draft.value?.id : undefined);
-    if (seq === readinessSeq && key === trialKey()) trialReadiness.value = result;
-  } catch (e) { if (seq === readinessSeq && key === trialKey()) readinessError.value = crErr(e); }
-}
-async function runTrial() {
-  if (!isStaticReal()) {
-    void router.replace({ query: { ...route.query, tab: 'def' } });
-    message.success(`已按${isDraft.value ? `草稿 ${draft.value?.id}` : '已发布口径'}试算近 30 日，结果见“近 30 日试算”`);
-    return;
-  }
-  const days = trialDays.value;
-  if (typeof days !== 'number' || !validTrialDays.value || trialBusy.value || !selected.value || (isDraft.value && (!cr.head.value || cr.loading.value || cr.error.value))) return;
-  const seq = ++trialSeq, key = trialKey(), ctx = currentApiContext(), id = selected.value;
-  trialBusy.value = true; trialError.value = ''; trialResult.value = undefined;
-  try {
-    const result = await trialMetric(id, isDraft.value ? draft.value?.id : undefined, { readonlyParams: false, query: { ver: ctx.ver, previewAs: ctx.previewAs }, headers: { 'X-Demo-As': ctx.demoAs ?? '', 'X-Ontology-Id': ctx.ontologyId ?? '' } }, days, trialReadiness.value?.hasTimeField === false);
-    if (seq !== trialSeq || key !== trialKey()) return;
-    trialResult.value = result;
-    void router.replace({ query: { ...route.query, tab: 'def' } });
-    if (result.rows.length) message.success('已按真实数据完成试算');
-    else message.info('所选范围内没有可见数据');
-  } catch (e) { if (seq === trialSeq && key === trialKey()) { trialError.value = crErr(e); message.error(trialError.value); } }
-  finally { if (seq === trialSeq && key === trialKey()) trialBusy.value = false; }
-}
-const trialTrend = computed(() => isStaticReal() ? (trialResult.value?.rows ?? []).map((row) => ({ date: row.date, value: row.value === null ? null : Number(row.value) })) : trend);
-const trialAxisFormat = new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumSignificantDigits: 4 });
-const trendOption = computed(() => ({
-  grid: { left: isStaticReal() ? 12 : 52, right: 12, top: isStaticReal() ? 28 : 12, bottom: 24, containLabel: isStaticReal() },
-  tooltip: isStaticReal() ? { trigger: 'axis', renderMode: 'richText', formatter: (points: { dataIndex: number }[]) => {
-    const row = trialResult.value?.rows[points[0]?.dataIndex];
-    return row ? `${row.date}\n${row.value ?? '--'}${cur.value.unit ? ` ${cur.value.unit}` : ''}` : '--';
-  } } : { trigger: 'axis', valueFormatter: (v: number) => fmtMoney(v) },
-  xAxis: { type: 'category', data: trialTrend.value.map((d) => d.date), axisLine: { lineStyle: { color: GRAY.g6 } }, axisTick: { show: false }, axisLabel: { color: GRAY.g8, fontSize: 12, interval: isStaticReal() ? 'auto' : 6 } },
-  yAxis: { type: 'value', name: isStaticReal() ? cur.value.unit : '', nameTextStyle: { color: GRAY.g8, fontSize: 12 }, axisLabel: { color: GRAY.g8, fontSize: 12, formatter: (v: number) => isStaticReal() ? trialAxisFormat.format(v) : `${(v / 10000).toFixed(0)}万` }, splitLine: { lineStyle: { color: GRAY.g4 } } },
-  series: [{ type: 'line', data: trialTrend.value.map((d) => d.value), symbol: 'none', lineStyle: { width: 1.5, color: BRAND } }],
-}));
-
 const verPage = ref(1);
 const refPage = ref(1);
 watch(selected, () => { verPage.value = 1; refPage.value = 1; });
@@ -339,7 +272,6 @@ const refCols = [
           :options="[{ label: '已发布', value: 'published' }, { label: `草稿 ${draft.id}`, value: 'draft' }]"
           @change="(v: any) => setView(v)" />
         <span class="mt-sp" />
-        <a-button :loading="trialBusy" :disabled="isStaticReal() && (!validTrialDays || trialReadiness?.ready === false || isDraft && (!cr.head.value || cr.loading.value || !!cr.error.value))" @click="runTrial">试算</a-button>
       </div>
       <a-tabs v-model:activeKey="tab" class="mt-tabs">
         <a-tab-pane key="def" tab="定义" />
@@ -355,41 +287,19 @@ const refCols = [
             <a-tooltip :title="readonly ? reason : ''"><a-button size="small" :disabled="readonly" @click="isStaticReal() && openDefinition()">编辑定义</a-button></a-tooltip>
           </div>
           <div class="mt-formula t-14 num">{{ FORMULA }}</div>
-          <a-descriptions v-if="isStaticReal()" :column="2" bordered size="small"><a-descriptions-item label="分组">{{ cur.group }}</a-descriptions-item><a-descriptions-item label="负责人">{{ cur.owner }}</a-descriptions-item></a-descriptions>
-          <a-descriptions :column="2" bordered size="small" class="mt-desc" :label-style="{ width: '96px', whiteSpace: 'nowrap' }">
+          <a-descriptions v-if="isStaticReal()" :column="{ xs: 1, sm: 1, md: 2, lg: 2, xl: 2, xxl: 2 }" bordered size="small" class="mt-desc"><a-descriptions-item label="分组">{{ cur.group }}</a-descriptions-item><a-descriptions-item label="负责人">{{ cur.owner }}</a-descriptions-item></a-descriptions>
+          <a-descriptions :column="{ xs: 1, sm: 1, md: 2, lg: 2, xl: 2, xxl: 2 }" bordered size="small" class="mt-desc" :label-style="{ width: '96px', whiteSpace: 'nowrap' }">
             <a-descriptions-item v-for="d in DISPLAY_DEF" :key="d.k" :label="d.k"><span class="mt-ell" :title="d.v">{{ d.v }}</span></a-descriptions-item>
           </a-descriptions>
-          <template v-if="isStaticReal()"><div class="mt-sec t-14 fw-600">口径变体</div><a-empty v-if="!VARIANTS.length" description="未配置口径变体" /><div v-for="v in VARIANTS" :key="v.code" class="t-14">{{ v.label }} · {{ v.code }} · {{ v.api }} · {{ v.version }} {{ v.default ? '· 同名默认' : '' }}</div></template>
+          <template v-if="isStaticReal()"><div class="mt-sec t-14 fw-600">口径变体</div><a-empty v-if="!VARIANTS.length" description="未配置口径变体" /><div v-for="v in VARIANTS" :key="v.code" class="t-14 mt-variant">{{ v.label }} · {{ v.code }} · {{ v.api }} · {{ v.version }} {{ v.default ? '· 同名默认' : '' }}</div></template>
           <div class="mt-sec t-14 fw-600">允许的维度</div>
-          <a-table :columns="dimCols" :data-source="DISPLAY_DIMS" :pagination="false" size="small" row-key="dim" />
+          <a-table class="mt-dim-table" :columns="dimCols" :data-source="DISPLAY_DIMS" :pagination="false" :scroll="{ x: 680 }" size="small" row-key="dim" />
         </div>
-        <div class="mt-def-right">
-          <div class="mt-sec t-14 fw-600 mt-sec-row">
-            <span>{{ isStaticReal() ? trialReadiness?.hasTimeField === false ? '当前快照试算' : validTrialDays ? `近 ${trialDays} 日试算` : '选择试算范围' : '近 30 日试算' }}</span><span v-if="isStaticReal() && trialReadiness?.hasTimeField !== false" class="t-12 c-3 fw-400"><a-input-number v-model:value="trialDays" aria-label="试算天数" :min="1" :max="93" :precision="0" size="small" style="width:76px" /> 天</span><span v-else-if="!isStaticReal()" class="t-12 c-3 fw-400">按口径 v3 计算 · 数据截至 2026-10-24 23:00</span>
-          </div>
-          <a-alert v-if="trialError" type="error" :message="trialError" show-icon />
-          <a-alert v-else-if="readinessError" type="error" :message="readinessError" show-icon><template #action><a-button size="small" @click="loadReadiness">重试</a-button></template></a-alert>
-          <a-alert v-else-if="isStaticReal() && trialReadiness?.ready === false" type="warning" message="当前口径暂不可试算" show-icon>
-            <template #description><ul class="mt-readiness"><li v-for="(issue, index) in trialReadiness.issues" :key="index">{{ issue.message }}<a-collapse v-if="issue.candidates?.length" ghost><a-collapse-panel key="properties" header="查看已定义属性"><div v-for="p in issue.candidates" :key="p.reference" class="t-12 c-3">{{ p.reference }} · {{ p.name }} · {{ p.mapped ? '已绑定' : '未绑定' }}</div></a-collapse-panel></a-collapse></li></ul></template>
-          </a-alert>
-          <div v-if="isStaticReal() && trialResult" class="t-12 c-3">{{ trialResult.scope }} · {{ trialResult.crId ? `已保存草稿 ${trialResult.crId}` : `口径 ${trialResult.version}` }}<template v-if="trialReadiness?.hasTimeField !== false"> · 数据截至 {{ trialResult.dataCutoff ?? '无可见数据' }}</template></div>
-          <div class="mt-chart"><a-empty v-if="isStaticReal() && !trialResult?.rows.length" :description="trialResult ? '所选范围内没有可见数据' : '暂无试算结果'" /><div v-else-if="isStaticReal() && trialReadiness?.hasTimeField === false" class="t-20 fw-600">{{ trialResult?.rows[0]?.value ?? '—' }} {{ cur.unit }}</div><EChart v-else :option="trendOption" /></div>
-          <div v-if="!isStaticReal()" class="mt-sec t-14 fw-600">不允许的维度</div>
-          <div v-for="d in (isStaticReal() ? [] : DENY)" :key="d.dim" class="mt-deny">
-            <span class="t-14 c-1">{{ d.dim }}</span>
-            <span class="t-12 c-3 mt-ell" :title="d.reason">{{ d.reason }}</span>
-          </div>
-          <div class="mt-sec t-14 fw-600">被引用</div>
-          <span v-if="isStaticReal()" class="t-14 c-2">详见“引用与影响”</span>
-          <div v-if="!isStaticReal()" class="mt-refs t-14">
-            <span>指标 <HoverCard kind="metric" id="atv">客单价</HoverCard>、<HoverCard kind="metric" id="gross_margin">毛利率</HoverCard> 等 3 个</span>
-            <span>规则 1 条，看板 2 个，认证问答 1 条</span>
-          </div>
-        </div>
+
       </div>
 
       <div v-else-if="tab === 'dims'" class="mt-body">
-        <a-table :columns="dimCols" :data-source="DISPLAY_DIMS" :pagination="false" size="middle" row-key="dim" />
+        <a-table class="mt-dim-table" :columns="dimCols" :data-source="DISPLAY_DIMS" :pagination="false" :scroll="{ x: 680 }" size="middle" row-key="dim" />
         <div v-if="!isStaticReal()" class="mt-sec t-14 fw-600">不允许的维度</div>
         <a-table v-if="!isStaticReal()" :columns="[{ title: '维度', dataIndex: 'dim', width: 120 }, { title: '原因', dataIndex: 'reason' }]" :data-source="DENY" :pagination="false" size="middle" row-key="dim" />
       </div>
@@ -445,22 +355,18 @@ const refCols = [
 .mt-tabs { padding: 0 16px; flex: none; }
 .mt-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
 .mt-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
-.mt-def { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; align-content: start; align-items: start; }
+.mt-def { display: block; }
 .mt-def-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.mt-def-right { min-width: 0; max-width: 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: var(--border); overflow: hidden; }
 .mt-sec { margin-top: 4px; }
+.mt-variant { overflow-wrap: anywhere; }
 .mt-sec-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: baseline; }
 .mt-formula { padding: 8px 12px; background: var(--g2); border: var(--border); border-radius: var(--radius); font-family: Menlo, Consolas, "Noto Sans Mono CJK SC", monospace; overflow-wrap: anywhere; }
-.mt-chart { height: 200px; width: 100%; min-width: 0; overflow: hidden; }
-.mt-readiness { margin: 0; padding-left: 18px; max-height: 224px; overflow: auto; overflow-wrap: anywhere; }
-.mt-readiness li + li { margin-top: 8px; }
-.mt-deny { display: flex; align-items: baseline; gap: 12px; padding: 6px 0; border-bottom: var(--border); }
 .mt-desc { min-width: 0; max-width: 100%; }
 .mt-desc.ant-descriptions :deep(.ant-descriptions-view > table) { width: 100%; table-layout: fixed; }
-.mt-desc :deep(.ant-descriptions-item-content) { min-width: 0; overflow: hidden; }
+.mt-desc :deep(.ant-descriptions-item-content) { min-width: 0; overflow-wrap: anywhere; }
 .mt-desc .mt-ell { white-space: normal; overflow-wrap: anywhere; }
+.mt-dim-table :deep(.ant-table-content > table) { min-width: 680px !important; }
 .mt-ell { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 100%; }
-.mt-refs { display: flex; flex-direction: column; gap: 4px; }
 .mt-note { margin-top: 4px; }
 
 .mt-ell { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

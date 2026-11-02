@@ -8,6 +8,7 @@ import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import { useAppStore } from '@/stores/app';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import { fitColumns } from '@/tableColumns';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
@@ -73,17 +74,17 @@ onBeforeUnmount(() => { ++listSeq; ++detailSeq; });
 const paged = computed(() => (live.value ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
 const fail = (e: unknown) => message.error((e as Error).message);
 
-const cols = [
+const cols = fitColumns([
   { title: '编号', dataIndex: 'id', key: 'id', width: 80 },
   { title: '问题', key: 'question', width: 240, ellipsis: true },
   { title: '绑定指标', key: 'metric', width: 230 },
-  { title: '语义计划摘要', key: 'plan', ellipsis: true },
+  { title: '语义计划摘要', key: 'plan', width: 240, ellipsis: true },
   { title: '状态', key: 'status', width: 210 },
   { title: '认证人', dataIndex: 'certifier', key: 'certifier', width: 80 },
   { title: '认证时间', key: 'at', width: 120 },
   { title: '近 30 天命中', key: 'hits', width: 100, align: 'right' },
   { title: '操作', key: 'op', width: 130 },
-];
+]);
 const stCls = (s: CertStatus) => (s === '待重新认证' ? 'c-1' : s === '已停用' ? 'c-3' : s === '待认证' ? 'c-2' : 'c-1');
 const planShort = (c: CertQa) => planText(c.plan).replace(`${metricLabel(c.plan.metric)} · `, '');
 

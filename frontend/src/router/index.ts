@@ -10,7 +10,9 @@ import { loadReleases, RELEASES } from '@/api/releases';
 import { resetDraftEdits } from '@/pages/ontology/useDraftEdits';
 import { resetDraftState } from '@/pages/ontology/parts/useDraftView';
 import { useConfirmStore } from '@/stores/confirm';
-import { useAppStore, PERSONAS, type AreaKey, type PersonaKey } from '@/stores/app';
+import { useAppStore, type AreaKey } from '@/stores/app';
+import { useAuthStore } from '@/stores/auth';
+import { safeReturnUrl } from '@/api/auth';
 
 const Placeholder = () => import('@/pages/PlaceholderPage.vue');
 
@@ -23,6 +25,7 @@ const pageRoutes: RouteRecordRaw[] = PAGES.map((p) => ({
 }));
 
 const routes: RouteRecordRaw[] = [
+  { path: '/login', name: 'login', component: () => import('@/pages/Login.vue'), meta: { title: '登录' } },
   {
     path: '/',
     component: AppLayout,
@@ -40,23 +43,35 @@ export const router = createRouter({ history: createWebHistory(), routes });
 const areaOf = (navKey: unknown, metaArea: unknown): AreaKey | undefined =>
   PAGES.find((p) => p.key === navKey)?.area.key ?? (metaArea as AreaKey | undefined);
 
-/** 演示身份（?as=viewer / ?as=admin）+ 区权限：无权限的区重定向回首页 */
+router.beforeEach(async (to) => {
+  const auth = useAuthStore();
+  await auth.restore();
+  if (!auth.authenticated) return to.name === 'login' ? true : { name: 'login', query: { returnUrl: safeReturnUrl(to.fullPath) } };
+  if (to.name === 'login') return safeReturnUrl(to.query.returnUrl);
+  // Retired impersonation links cannot change the authenticated identity.
+  if ('as' in to.query || 'previewAs' in to.query) {
+    const query = { ...to.query }; delete query.as; delete query.previewAs;
+    return { path: to.path, hash: to.hash, query, replace: true };
+  }
+});
+
+/** 本体与区权限：身份只来自已恢复的真实会话。 */
 router.beforeEach((to) => {
+  if (to.name === 'login') return;
   const app = useAppStore();
   if (anyReal() && to.name === 'home' && !Object.prototype.hasOwnProperty.call(to.query, 'ontology') && (app.workspaceError || !app.workspace && !app.workspaceSelectionSaved)) return { name: 'workspaces', query: to.query };
   if (to.name !== 'workspaces' && !Object.prototype.hasOwnProperty.call(to.query, 'ontology')) return { path: to.path, hash: to.hash, query: { ...to.query, ontology: app.ontologyId } };
-  const as = to.query.as;
-  if (typeof as === 'string' && as in PERSONAS && as !== app.persona) app.setPersona(as as PersonaKey);
 });
 
 let workspaceGuardSeq = 0;
 let validatedIdentity = '';
 router.beforeResolve(async (to, from) => {
+  if (to.name === 'login' || !useAuthStore().authenticated) { validatedIdentity = ''; return; }
   const app = useAppStore();
   const seq = ++workspaceGuardSeq;
   if (to.name === 'workspaces') { app.workspaceLoading = false; return; }
   const id = typeof to.query.ontology === 'string' ? to.query.ontology : '';
-  const identity = `${app.persona}:${id}`;
+  const identity = `${useAuthStore().user?.code}:${id}`;
   if (anyReal() && (identity !== validatedIdentity || app.workspaceError)) {
     app.workspaceLoading = true;
     let workspace;

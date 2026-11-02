@@ -71,6 +71,8 @@ const remote = reactive({
   hits: { items: [] as Hit[], total: 0 }, hits7: 0, recent: [] as Hit[], hit: null as RuleHitDetailDto | null,
   replay: null as (ReplayDto & { k: string }) | null, versions: [] as RuleVersionDto[], staged: [] as ActionRecord[],
 });
+const objectKindLabel = (kind: string) => remote.meta.objects.find(o => o.id === kind)?.name
+  || (kind === 'store' || kind === 'product' || kind === 'order' || kind === 'region' ? objKindLabel(kind) : kind) || '对象';
 const stripDraft = (d: RuleDto): RuleDef => { const { draft: _d, displayStatus: _s, cr: _c, ...r } = d; return r as RuleDef; };
 const EMPTY_RULE: RuleDef = { id: '', name: '', version: 0, status: '已发布', owner: '', desc: '', objKind: '' as RuleDef['objKind'], level: '中', output: '告警', conds: [], logic: '且', expr: '', dedupe: '', cooldown: '', trigger: { kind: '定时', text: '' }, autoStage: { enabled: false, actionTypeId: '', mapping: [], confirmer: '' }, weekly: 0, core: false };
 let mounted = true;
@@ -431,11 +433,11 @@ watch([dynamicContextKey, () => base.value.objKind], ([ctx, k]) => {
     if (mounted && seq === titleSeq && ctx === dynamicContextKey() && p) titleNames[k] = p.name;
   }, () => { /* 后台没起来 / 无该对象类型：用对象类型名 */ });
 }, { immediate: true, flush: 'sync' });
-const objTitle = computed(() => titleNames[base.value.objKind] ?? objKindLabel(base.value.objKind) ?? '对象');
+const objTitle = computed(() => titleNames[base.value.objKind] ?? objectKindLabel(base.value.objKind));
 const hitCols = computed(() => [
   { title: '命中时间', dataIndex: 'at', width: 172 },
   { title: '告警 / 命中编号', key: 'id', width: 200 },
-  { title: objTitle.value, key: 'obj', ellipsis: true },
+  { title: objTitle.value, key: 'obj', width: 180, ellipsis: true },
   ...(hasDims(hits.value.items) ? [DIM_COL] : []),
   { title: '命中值', dataIndex: 'value', width: 200, ellipsis: { showTitle: true } },
   { title: '阈值', dataIndex: 'threshold', width: 160, ellipsis: { showTitle: true } },
@@ -457,7 +459,7 @@ const recentHits = computed(() => (live.value ? remote.recent : [...hitsOf(base.
 const recentCols = computed(() => [
   { title: '命中时间', dataIndex: 'at', width: 172 },
   { title: '告警 / 命中编号', key: 'id', width: 200 },
-  { title: objTitle.value, key: 'obj', ellipsis: true },
+  { title: objTitle.value, key: 'obj', width: 180, ellipsis: true },
   { title: '命中值', dataIndex: 'value', width: 200, ellipsis: { showTitle: true } },
   { title: '处理状态', key: 'result', width: 110 },
 ]);
@@ -504,7 +506,7 @@ const sampleCols = computed(() => [
   { title: '时间', dataIndex: 'at', width: 180 },
   { title: objTitle.value, key: 'obj', width: 240, ellipsis: { showTitle: true } },
   ...(hasDims(result.value?.samples ?? []) ? [DIM_COL] : []),
-  { title: live.value ? '计算输入' : '命中值', dataIndex: 'value', ellipsis: { showTitle: true } },
+  { title: live.value ? '计算输入' : '命中值', dataIndex: 'value', width: 200, ellipsis: { showTitle: true } },
   { title: live.value ? '条件计算结果' : '与实际命中对比', key: 'diff', width: 220, ellipsis: { showTitle: true } },
 ]);
 
@@ -611,7 +613,7 @@ const verCols = [
       </div>
       <ul class="ru-items">
         <li v-for="r in list" :key="r.id" :class="{ active: r.id === base.id }" @click="pick(r.id)">
-          <div class="ru-row" :title="`${r.id} · ${r.trigger.kind} · ${objKindLabel(r.objKind)} · ${r.output}`">
+          <div class="ru-row" :title="`${r.id} · ${r.trigger.kind} · ${objectKindLabel(r.objKind)} · ${r.output}`">
             <span class="t-14 ru-name">{{ r.name }}</span>
             <span class="t-12 num ru-meta"><span v-if="r.status !== '已发布'" :class="ruleStatus(r).badge === 'warning' ? 'tl-attention' : 'c-2'">{{ ruleStatus(r).text }} · </span><span class="c-1">v{{ r.version }}</span></span>
           </div>
@@ -698,7 +700,7 @@ const verCols = [
           <a-descriptions-item label="去重键">{{ rule.dedupe }}</a-descriptions-item>
           <a-descriptions-item label="冷却">{{ rule.cooldown }}</a-descriptions-item>
           <a-descriptions-item label="命中后">{{ rule.output === '告警' ? `生成${rule.level}级告警，进入告警处理` : '通知负责人（不生成告警）' }}</a-descriptions-item>
-          <a-descriptions-item label="对象">{{ objKindLabel(rule.objKind) }}</a-descriptions-item>
+          <a-descriptions-item label="对象">{{ objectKindLabel(rule.objKind) }}</a-descriptions-item>
           <a-descriptions-item label="负责人">{{ rule.owner }}</a-descriptions-item>
           <a-descriptions-item label="近 7 天命中">{{ fmtInt(hits7) }} 次</a-descriptions-item>
         </a-descriptions>
@@ -772,7 +774,11 @@ const verCols = [
             <span class="t-12 c-3">执行方式</span>
             <a-select :value="stageEdit.executionMode ?? 'confirm'" :options="[{ value: 'confirm', label: '生成待确认' }, { value: 'auto', label: '自动执行' }]" :disabled="!definitionEditable || !stageEdit.enabled" size="small"
               @change="(v: 'confirm' | 'auto') => (ensureEdits().autoStage.executionMode = v)" />
+            <span class="t-12 c-3">有效期（秒）</span>
+            <a-input-number :value="stageEdit.validitySeconds ?? 0" :min="0" :max="86400" :precision="0" :disabled="!definitionEditable || !stageEdit.enabled" size="small"
+              @update:value="(v: number | null) => (ensureEdits().autoStage.validitySeconds = v ?? 0)" />
           </div>
+          <div class="t-12 c-3">0 不额外设限；外发前会复核原规则，过期或条件不再满足时需重新核对并发起。</div>
           <div class="t-12 c-3">动作自身的确认或审批策略优先，选择自动执行也可能生成待确认或待审批动作。</div>
           <div v-if="rule.trigger.kind === '定时'" class="t-12 c-3">定时触发不支持使用事件字段作为动作参数来源。</div>
           <a-table :columns="mapCols" :data-source="mappingRows" :pagination="false" size="small" row-key="param" class="ru-map"
@@ -793,7 +799,7 @@ const verCols = [
             <span class="t-12 num c-2">{{ a.id }}</span>
             <span class="t-12 c-1 ru-st-o" :title="a.objLabel">{{ a.objLabel }}</span>
             <span v-if="a.status === '结果未知'" class="t-12 tl-attention"><QuestionCircleOutlined /> 结果未知 · 待对账</span>
-            <a-badge v-else :status="a.status === '待确认' ? 'warning' : a.status === '失败' ? 'error' : 'default'" :text="a.status" />
+            <a-badge v-else :status="a.status === '待确认' ? 'warning' : a.status === '失败' || a.reconcile === '外部未执行' ? 'error' : 'default'" :text="a.reconcile ? `${a.status} · ${a.reconcile}` : a.status" :title="a.failReason" />
           </div>
           <div v-if="!staged.length" class="t-12 c-3">暂无。开启后命中生成的动作会出现在这里和动作中心“待确认”。</div>
         </div>

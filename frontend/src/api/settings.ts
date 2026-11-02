@@ -28,11 +28,11 @@ export const saveTenantSettings = async (body: TenantSettingsSave) => refreshTen
 
 export interface ModelSettingsData {
   usage: 'qa' | 'ontology'; label: string; model: string; baseUrl: string; timeoutSec: number;
-  enabled: boolean; hasKey: boolean; source: 'environment' | 'database';
+  enabled: boolean; authMode: 'key' | 'none'; hasKey: boolean; source: 'environment' | 'database';
   keySource: 'environment' | 'database' | 'none'; lockVersion: number; updatedAt: string | null;
 }
-export interface ModelsSettingsData { items: ModelSettingsData[]; canManage: boolean; trustedOrigins: string[] }
-export type ModelSettingsSave = Pick<ModelSettingsData, 'model' | 'baseUrl' | 'timeoutSec' | 'enabled' | 'lockVersion'> & { apiKey?: string };
+export interface ModelsSettingsData { items: ModelSettingsData[]; canManage: boolean }
+export type ModelSettingsSave = Pick<ModelSettingsData, 'model' | 'baseUrl' | 'timeoutSec' | 'enabled' | 'authMode' | 'lockVersion'> & { apiKey?: string };
 export const loadModelSettings = () => settingsApi.get<ModelsSettingsData>('/settings/models', { ontologyScope: false });
 export const saveModelSettings = (usage: ModelSettingsData['usage'], body: ModelSettingsSave) => settingsApi.put<ModelSettingsData>(`/settings/models/${usage}`, body, { ontologyScope: false });
 export const loadNotificationSettings = () => settingsApi.get<{ inbox: { enabled: boolean; sources: string[] }; externalChannelsConfigured: boolean }>('/settings/notifications', { ontologyScope: false });

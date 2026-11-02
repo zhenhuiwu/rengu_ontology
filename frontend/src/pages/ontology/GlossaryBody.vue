@@ -581,9 +581,9 @@ onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
               <div v-if="mark('definition') === '修改'" class="c-3 gl-del">{{ before('definition') }}</div>
               <span class="c-1">{{ view.definition || '--' }}</span><a-tag v-if="mark('definition')" class="gl-diff">{{ mark('definition') }}</a-tag>
             </a-descriptions-item>
-            <a-descriptions-item label="计算说明" :span="2">
+            <a-descriptions-item v-if="view.calc" label="计算说明" :span="2">
               <div v-if="mark('calc') === '修改'" class="c-3 num gl-del">{{ before('calc') }}</div>
-              <span class="num gl-ell" :title="view.calc">{{ view.calc || '--' }}</span><a-tag v-if="mark('calc')" class="gl-diff">{{ mark('calc') }}</a-tag>
+              <span class="num gl-ell" :title="view.calc">{{ view.calc }}</span><a-tag v-if="mark('calc')" class="gl-diff">{{ mark('calc') }}</a-tag>
             </a-descriptions-item>
             <a-descriptions-item label="同义词" :span="2">
               <template v-if="view.synonyms.length">
@@ -608,9 +608,9 @@ onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
               <a-form-item label="名称"><a-input v-model:value="form.name" /></a-form-item>
               <a-form-item label="类型"><a-select v-model:value="form.type" :options="K_TYPES.map((t) => ({ value: t, label: t }))" /></a-form-item>
             </div>
-            <a-form-item label="定义"><a-textarea v-model:value="form.definition" :rows="3" placeholder="用业务语言写清楚是什么、不包括什么；问数会用它理解提问" /></a-form-item>
-            <a-form-item label="计算说明"><a-textarea v-model:value="form.calc" :rows="2" placeholder="例如：门店.开业日期 ≤ 统计期起始 − 12 个月" /></a-form-item>
-            <a-form-item label="同义词"><a-select v-model:value="form.synonyms" mode="tags" placeholder="输入后回车" /></a-form-item>
+            <a-form-item label="定义"><a-textarea v-model:value="form.definition" :rows="3" placeholder="用业务语言写清楚这个说法指什么" /></a-form-item>
+            <a-form-item label="同义词"><a-select v-model:value="form.synonyms" mode="tags" :open="false" placeholder="输入口头说法后按回车，例如：效能计算" /></a-form-item>
+            <div class="t-12 c-3">数怎么算写在指标口径的公式里。这里只记录人会怎么说。</div>
             <a-form-item label="适用于"><a-alert v-if="candidateError" type="error" :message="candidateError" show-icon><template #action><a-button size="small" @click="loadCandidates">重试</a-button></template></a-alert><a-select v-model:value="form.applies" :loading="candidateLoading" :disabled="candidateLoading || !!candidateError" mode="multiple" :options="APPLY_OPTIONS" option-filter-prop="label" placeholder="选择对象类型或指标" /><div v-for="a in unavailableApplies" :key="`${a.kind}:${a.id}`" class="t-12 c-warning">{{ a.name || a.id }}（已失效或无权限；保留到显式移除）<a-button type="link" size="small" @click="form.applies = form.applies.filter((k) => k !== `${a.kind}:${a.id}`)">移除引用</a-button></div></a-form-item>
             <div class="gl-form-grid">
               <a-form-item label="生效期"><a-input v-model:value="form.period" /></a-form-item>
@@ -651,7 +651,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
               <a-tag v-for="w in words" :key="w" :title="isConflict(w) ? '与其他知识冲突' : undefined">{{ w }}</a-tag>
             </a-descriptions-item>
             <a-descriptions-item label="映射为">{{ view.maps || '--' }}</a-descriptions-item>
-            <a-descriptions-item label="计算说明"><span class="num gl-ell" :title="view.calc">{{ view.calc || '--' }}</span></a-descriptions-item>
+            <a-descriptions-item v-if="view.calc" label="计算说明"><span class="num gl-ell" :title="view.calc">{{ view.calc }}</span></a-descriptions-item>
           </a-descriptions>
           <div class="gl-sec t-14 fw-600 gl-sec-row"><span>默认过滤</span><span class="t-12 c-3 fw-400">问题里没写时自动加上，回答里注明</span></div>
           <a-table v-if="view.filters.length" :columns="filterCols" :data-source="view.filters" :pagination="false" size="small" row-key="field" />
@@ -733,7 +733,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
   <a-modal v-model:open="newOpen" title="新建业务知识" ok-text="保存" :confirm-loading="saving" :mask-closable="!saving" @ok="saveNew">
     <a-form layout="vertical">
       <a-form-item label="名称" required><a-input v-model:value="form.name" /></a-form-item><a-form-item label="类型"><a-select v-model:value="form.type" :options="K_TYPES.map(t => ({ value: t, label: t }))" /></a-form-item>
-      <a-form-item label="定义"><a-textarea v-model:value="form.definition" /></a-form-item><a-form-item label="计算说明"><a-textarea v-model:value="form.calc" /></a-form-item><a-form-item label="同义词"><a-select v-model:value="form.synonyms" mode="tags" /></a-form-item>
+      <a-form-item label="定义"><a-textarea v-model:value="form.definition" placeholder="用业务语言写清楚这个说法指什么" /></a-form-item><a-form-item label="同义词"><a-select v-model:value="form.synonyms" mode="tags" :open="false" placeholder="输入口头说法后按回车，例如：效能计算" /></a-form-item><div class="t-12 c-3">数怎么算写在指标口径的公式里。这里只记录人会怎么说。</div>
       <a-form-item label="适用于"><a-select v-model:value="form.applies" mode="multiple" :options="APPLY_OPTIONS" :loading="candidateLoading" :disabled="candidateLoading || !!candidateError" /></a-form-item><a-alert v-if="candidateError" type="error" :message="candidateError" show-icon />
       <a-form-item label="生效期"><a-input v-model:value="form.period" /></a-form-item><a-form-item label="负责人"><a-input v-model:value="form.owner" /></a-form-item>
     </a-form>
@@ -763,7 +763,7 @@ onBeforeUnmount(() => { ++definitionSeq; ++ruleSeq; ++candidateSeq; });
 .gl-sp { flex: 1; }
 .gl-tabs { padding: 0 16px; flex: none; }
 .gl-tabs :deep(.ant-tabs-nav) { margin-bottom: 0; }
-.gl-body { flex: 1; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.gl-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
 .gl-two { flex-direction: row; gap: 16px; }
 .gl-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .gl-right { width: 520px; flex: none; display: flex; flex-direction: column; gap: 8px; padding-left: 16px; border-left: var(--border); }

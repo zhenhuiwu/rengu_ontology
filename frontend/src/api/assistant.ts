@@ -1,5 +1,6 @@
 import { apiClient, currentApiContext } from './http';
 import { useAppStore } from '@/stores/app';
+import { hasConfirmedEmptyRelease } from './releases';
 
 export type AssistantTarget = 'function' | 'object' | 'relation' | 'action' | 'metric' | 'dimension' | 'dictionary' | 'knowledge' | 'event' | 'rule';
 export interface AssistantEdit { targetId: string; lockVersion: number; version: string }
@@ -11,15 +12,22 @@ export const generateAssistantDraft = (target: AssistantTarget | 'auto', prompt:
   api.post<AssistantDraft>('/assistant:generate', { target, prompt, history, ...(edit ? { edit } : {}) });
 
 const PREFILL_KEY = 'ontology:assistant-prefill';
+export function assistantVersionReady() {
+  const app = useAppStore();
+  return !app.workspaceLoading && !app.workspaceError && !!app.ontologyVersion && (app.ontologyVersion !== '—' || hasConfirmedEmptyRelease());
+}
 export function clearAssistantPrefill() { sessionStorage.removeItem(PREFILL_KEY); }
 export function putAssistantPrefill(value: AssistantPrefill) { sessionStorage.setItem(PREFILL_KEY, JSON.stringify(value)); }
+export function isAssistantPrefillCurrent(value: AssistantPrefill) {
+  const app = useAppStore(), context = currentApiContext();
+  return value.ontologyId === context.ontologyId && value.version === app.ontologyVersion && assistantVersionReady() && value.identity === (context.demoAs || app.persona) && !context.ver && !context.previewAs;
+}
 export function consumeAssistantPrefill(target: AssistantTarget, ontologyId: string): AssistantPrefill | null {
   const raw = sessionStorage.getItem(PREFILL_KEY);
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as AssistantPrefill;
-    const app = useAppStore(), context = currentApiContext();
-    if (value.ontologyId !== ontologyId || value.version !== app.ontologyVersion || value.version === '—' || value.identity !== (context.demoAs || app.persona) || context.ver || context.previewAs) { clearAssistantPrefill(); return null; }
+    if (value.ontologyId !== ontologyId || !isAssistantPrefillCurrent(value)) { clearAssistantPrefill(); return null; }
     if (value.target !== target) return null;
     clearAssistantPrefill();
     return value;

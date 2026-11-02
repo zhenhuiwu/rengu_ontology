@@ -3,12 +3,13 @@ import { effectScope, reactive, watch } from 'vue';
 import { apiClient, currentApiContext } from '@/api/http';
 import { loadMeta, fmtVal, propLabel } from '@/pages/objects/objMeta';
 import { getRow } from '@/pages/objects/objRows';
-import type { ObjView, ObjField } from './objectRegistry';
+import { canResolve, type ObjView, type ObjField } from './objectRegistry';
 
 const staticApi = apiClient('static');
 const qaApi = apiClient('qa');
 const dynamicApi = apiClient('dynamic');
 const businessKinds = new Set(['region', 'store', 'product', 'order']);
+const isBusinessKind = (kind: string) => !!kind && (businessKinds.has(kind) || !canResolve(kind));
 const cache = reactive<Record<string, ObjView>>({});
 const pending = new Set<string>();
 const contextKey = () => JSON.stringify(currentApiContext());
@@ -36,7 +37,7 @@ function fieldsOf(row: Record<string, unknown>, labels: Record<string, string>):
     .map(([key, label]) => ({ label, value: String(row[key]) }));
 }
 async function read(kind: string, id: string, current: () => boolean): Promise<ObjView | null> {
-  if (businessKinds.has(kind)) {
+  if (isBusinessKind(kind)) {
     if (!staticApi.isReal() || !qaApi.isReal()) throw new Error('对象元数据与数据服务尚未接入');
     const meta = await loadMeta(kind);
     if (!current()) return null;
@@ -69,7 +70,7 @@ async function read(kind: string, id: string, current: () => boolean): Promise<O
     fields, brief: fields.slice(0, 4), ...(status ? { status: { text: String(status), color: 'default' as const } } : {}) };
 }
 
-export const usesRealObject = (kind: string) => businessKinds.has(kind) ? (staticApi.isReal() || qaApi.isReal())
+export const usesRealObject = (kind: string) => isBusinessKind(kind) ? (staticApi.isReal() || qaApi.isReal())
   : kind === 'metric' || kind === 'object-type' ? staticApi.isReal() : kind === 'rule' ? dynamicApi.isReal() : false;
 
 /** undefined = 此 kind 对应模块显式处于 mock；真实失败始终返回错误状态，禁止调用旧 resolver。 */

@@ -2,12 +2,12 @@
 /**
  * API 密钥（PDE工程师）。
  * 列表（full 分页，一屏 18 行）：名称、掩码密钥（前缀 + 后 4 位）、权限范围、创建人、最近使用、到期、状态；筛选写在 URL。
- * 新建在抽屉里（?form=create，可 &from=AK-xxxx 复制已有密钥的配置）；生成后密钥明文只显示这一次，带复制按钮，确认已保存才能关闭。
+ * 新建在抽屉里（?form=create，可 &from=AK-xxxx 复制已有密钥的配置）；生成后仅显示掩码，当前窗口可复制密钥，带保存确认。
  * 详情抽屉（?key=AK-xxxx）：配置和最近调用（simple 分页）。吊销走统一确认卡，不可恢复。
  * 每个密钥必须绑定身份 + 数据范围（角色，或服务账号 + 数据范围），新建时缺少则不能生成；详情显示“以 xx 角色查询 · 大区 = 华东”。
- * 颜色：状态码非 200 都是失败（红）；即将过期 灰点 + 文字（橙色只用于 待确认 / 结果未知）。
+ * 颜色：2xx 为成功；即将过期 灰点 + 文字（橙色只用于 待确认 / 结果未知）。
  */
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { CopyOutlined, ExclamationCircleOutlined } from '@ant-design/icons-vue';
@@ -20,11 +20,13 @@ import { paginate, fmtInt, EMPTY } from '@/mock';
 import { API_KEYS, KEY_SCOPES, SERVICE_ACCOUNTS, SA_SCOPES, bindingText, keyActor, keyCalls, newSecret, type ApiKey, type KeyBinding, type KeyScope, type KeyStatus } from '@/mock/apikeys';
 import { ROLES } from '@/mock/roles';
 import { adminApiOn } from '@/api/admin';
-import { apiKeyCalls, apiKeyDetail, apiKeysMeta, createApiKey, createServiceAccount, listServiceAccounts, queryApiKeys, revokeApiKey, revokeServiceAccount, updateApiKey, type KeyPatch, type KeysMeta, type KeysPage, type RemoteKey, type ServiceAccount } from '@/api/apikeys';
+import { apiKeyCalls, apiKeyDetail, apiKeysMeta, createApiKey, createServiceAccount, listServiceAccounts, queryApiKeys, revokeApiKey, revokeServiceAccount, rotateApiKey, updateApiKey, type KeyPatch, type KeysMeta, type KeysPage, type RemoteKey, type ServiceAccount } from '@/api/apikeys';
 import { loadRolesState } from '@/api/roles';
 import { currentApiContext } from '@/api/http';
+import { fitColumns } from '@/tableColumns';
 import type { PageResult } from '@/api/http';
 import type { KeyCall } from '@/mock/apikeys';
+import { canCopyKeyWorkspace } from './apiKeyCopy';
 
 const route = useRoute();
 const router = useRouter();
@@ -69,7 +71,7 @@ const BIND_ROLES = ROLES.filter((r) => r.scopes.length).map((r) => r.name);
 const withScope = (b: KeyBinding): KeyBinding => (b.kind === '角色' ? { ...b, scope: roleScope(b.role) || b.scope } : b);
 const keys = ref<ApiKey[]>(real ? [] : API_KEYS.map((k) => ({ ...k, binding: withScope(k.binding) })));
 const mask = (k: ApiKey) => `${k.prefix}****${k.last4}`;
-const daysLeft = (d: string) => Math.round((new Date(d).getTime() - new Date(TODAY).getTime()) / 86400000);
+const daysLeft = (d: string) => real ? Math.max(0, Math.ceil((new Date(d.replace(' ', 'T')).getTime() - Date.now()) / 86400000)) : Math.round((new Date(d).getTime() - new Date(TODAY).getTime()) / 86400000);
 
 // 筛选（写在 URL，便于分享）
 const qref = (k: string, d = '全部') => computed({ get: () => q(k) || d, set: (v: string) => setQuery({ [k]: v === d ? undefined : v || undefined, page: undefined }) });
@@ -102,10 +104,10 @@ async function reload() {
 watch([statusF, scopeF, kw, pq.page, pq.size, () => JSON.stringify(currentApiContext())], reload, { immediate: true });
 // 状态：有效 / 即将过期 灰（即将过期另写剩余天数）；已过期 红；已吊销 灰（文字淡）
 const badge = (_s: KeyStatus) => 'default';
-const columns = [
+const columns = fitColumns([
   { title: '名称', key: 'name', width: 190, ellipsis: true },
   { title: '密钥', key: 'key', width: 170 },
-  { title: '权限范围', key: 'scopes' },
+  { title: '权限范围', key: 'scopes', width: 200, ellipsis: true },
   { title: '绑定身份', key: 'binding', width: 150, ellipsis: true },
   { title: '创建人', dataIndex: 'creator', key: 'creator', width: 80 },
   { title: '创建时间', key: 'createdAt', width: 140 },
@@ -114,14 +116,14 @@ const columns = [
   { title: '状态', key: 'status', width: 100 },
   { title: '近 7 天调用', key: 'calls', width: 110, align: 'right' as const },
   { title: '操作', key: 'op', width: 180 },
-];
+]);
 
 // 吊销
 async function revoke(k: ApiKey) {
   if (readonly.value || busy.value) return;
   const context = JSON.stringify(currentApiContext());
   const ok = await confirm.ask({
-    title: '吊销 API 密钥', target: `${k.name}（${mask(k)}）`, okText: '吊销', danger: true, irreversible: true,
+    title: '吊销 API 密钥', target: `${k.name}（${mask(k)}）`, okText: '吊销', danger: true, irreversible: true, dangerLabel: '密钥将立即吊销且不能恢复',
     fields: [
       { label: '权限范围', value: scopesText(k.scopes) },
       { label: '绑定身份', value: bindText(k.binding) },
@@ -137,7 +139,7 @@ async function revoke(k: ApiKey) {
       const result = await revokeApiKey(k.id);
       if (context !== JSON.stringify(currentApiContext())) return;
       Object.assign(k, result);
-      if (remoteDetail.value?.id === k.id) remoteDetail.value = result as unknown as ApiKey;
+      if (q('key') === k.id) { remoteDetail.value = result as unknown as ApiKey; detailError.value = ''; }
       await reload(); message.success(`已吊销：${k.name}`);
     } catch (e) { message.error(`吊销失败：${errorText(e)}`); }
     finally { busy.value = false; }
@@ -158,7 +160,7 @@ watch(() => q('key'), () => { cpage.value = 1; });
 const remoteCalls = ref<PageResult<KeyCall> | null>(null);
 const cpaged = computed(() => real ? remoteCalls.value ?? { items: [], total: 0 } : paginate(calls.value, { page: cpage.value, size: CSIZE }));
 let detailSeq = 0;
-watch([() => q('key'), cpage, () => JSON.stringify(currentApiContext())], async () => {
+async function loadDetail() {
   if (!real) return;
   const seq = ++detailSeq; const id = q('key');
   const context = JSON.stringify(currentApiContext());
@@ -167,10 +169,13 @@ watch([() => q('key'), cpage, () => JSON.stringify(currentApiContext())], async 
   try {
     const [key, result] = await Promise.all([apiKeyDetail(id), apiKeyCalls(id, cpage.value, CSIZE)]);
     if (seq !== detailSeq || context !== JSON.stringify(currentApiContext())) return;
-    remoteDetail.value = key as unknown as ApiKey; remoteCalls.value = result;
+    const selected = detail.value;
+    if (selected?.id !== key.id || rk(selected).version <= key.version) remoteDetail.value = key as unknown as ApiKey;
+    remoteCalls.value = result;
     if (result.page !== cpage.value) cpage.value = result.page;
-  } catch (e) { if (seq === detailSeq) detailError.value = `详情加载失败：${errorText(e)}`; }
-}, { immediate: true });
+  } catch (e) { if (seq === detailSeq && context === JSON.stringify(currentApiContext())) detailError.value = `详情加载失败：${errorText(e)}`; }
+}
+watch([() => q('key'), cpage, () => JSON.stringify(currentApiContext())], loadDetail, { immediate: true });
 
 // 新建抽屉
 interface Form {
@@ -187,12 +192,18 @@ const createOpen = computed(() => q('form') === 'create');
 const secret = ref<{ key: ApiKey; text: string } | null>(null);
 const saved = ref(false);
 const tried = ref(false); // 点过“生成密钥”才显示必填红字
-watch(createOpen, (open) => {
+const cloneBlocked = ref('');
+const cloneSourceScope = ref('');
+watch([createOpen, () => q('from'), () => JSON.stringify(currentApiContext())], ([open]) => {
   if (!open) { secret.value = null; return; }
   secret.value = null; saved.value = false; tried.value = false;
   Object.assign(form, blank());
   const src = keys.value.find((k) => k.id === q('from')) ?? (remoteDetail.value?.id === q('from') ? remoteDetail.value : null);
-  if (src) Object.assign(form, { name: `${src.name}-new`, env: src.env, scopes: [...src.scopes], bindKind: src.binding.kind === '服务账号' ? '服务账号' : '角色', principal: src.binding.kind === '服务账号' ? '服务账号' : '用户', saId: rk(src).binding.serviceAccountId, limitActions: rk(src).actionTypes != null, actionTypes: [...(rk(src).actionTypes ?? [])], limitEvents: rk(src).eventTypes != null, eventTypes: [...(rk(src).eventTypes ?? [])], limitFunctions: rk(src).functionTypes != null, functionTypes: [...(rk(src).functionTypes ?? [])], rate: rk(src).ratePerMinute ?? null, quota: rk(src).quotaPerDay ?? null, role: src.binding.role, account: src.binding.account, saScope: src.binding.kind === '服务账号' ? src.binding.scope : undefined, ip: src.ipAllow.join('\n'), note: `替换 ${src.name}（${src.id}）` });
+  cloneSourceScope.value = real && q('from') ? (src ? rk(src).ontologyIds?.join('、') || '未知' : '未知') : '';
+  cloneBlocked.value = real && q('from') && !canCopyKeyWorkspace(src ? rk(src).ontologyIds : undefined, currentApiContext().ontologyId)
+    ? `复制未应用：来源本体 ${cloneSourceScope.value}，当前目标本体 ${currentApiContext().ontologyId ?? 1}。请切换到来源唯一绑定的本体后重试；多本体或未知绑定请改为手动新建并重新授权。`
+    : '';
+  if (src && !cloneBlocked.value) Object.assign(form, { name: `${src.name}-new`, env: src.env, scopes: [...src.scopes], bindKind: src.binding.kind === '服务账号' ? '服务账号' : '角色', principal: src.binding.kind === '服务账号' ? '服务账号' : '用户', saId: rk(src).binding.serviceAccountId, limitActions: rk(src).actionTypes != null, actionTypes: [...(rk(src).actionTypes ?? [])], limitEvents: rk(src).eventTypes != null, eventTypes: [...(rk(src).eventTypes ?? [])], limitFunctions: rk(src).functionTypes != null, functionTypes: [...(rk(src).functionTypes ?? [])], rate: rk(src).ratePerMinute ?? null, quota: rk(src).quotaPerDay ?? null, role: src.binding.role, account: src.binding.account, saScope: src.binding.kind === '服务账号' ? src.binding.scope : undefined, ip: src.ipAllow.join('\n'), note: `替换 ${src.name}（${src.id}）` });
   formSnap.value = JSON.stringify(blank());
 }, { immediate: true });
 const formDirty = computed(() => createOpen.value && !secret.value && JSON.stringify(form) !== formSnap.value);
@@ -200,7 +211,7 @@ const nameOk = computed(() => /^[a-z0-9][a-z0-9-]{2,39}$/.test(form.name));
 const nameTaken = computed(() => !real && keys.value.some((k) => k.name === form.name && k.status !== '已吊销'));
 const saOptions = computed(() => (meta.value?.serviceAccounts ?? []).map((a) => ({ value: a.id, label: `${a.name}（${a.id} · ${a.roleName}）` })));
 const realBinding = (): KeyBinding | null => {
-  if (form.principal === '用户') return meta.value?.binding ?? null;
+  if (form.principal === '用户') return meta.value?.binding ? { ...meta.value.binding, scope: `${scopesText(form.scopes) || '未选择权限范围'}；创建时授权与当前真实角色权限的交集` } : null;
   const a = meta.value?.serviceAccounts?.find((x) => x.id === form.saId);
   return a ? { kind: '服务账号', account: a.name, scope: `服务角色 ${a.roleName} 的当前权限`, ...{ serviceAccountName: a.name, roleName: a.roleName } } as KeyBinding : null;
 };
@@ -209,6 +220,7 @@ const formBinding = computed<KeyBinding | null>(() => real ? realBinding() : (fo
   : (form.account && form.saScope ? { kind: '服务账号', account: form.account, scope: form.saScope } : null)));
 const formErrors = computed(() => {
   const e: string[] = [];
+  if (cloneBlocked.value) e.push(cloneBlocked.value);
   if (!nameOk.value) e.push('请填写名称（小写字母、数字和短横线，3–40 个字符）');
   else if (nameTaken.value) e.push('已有同名的有效密钥');
   if (!form.scopes.length) e.push('请至少勾选一项权限范围');
@@ -230,10 +242,11 @@ async function create() {
   if (!canCreate.value || !formBinding.value) return;
   if (real) {
     const context = JSON.stringify(currentApiContext());
+    const confirmedForm = JSON.stringify(form);
     const ok = await confirm.ask({ title: '生成 API 密钥', target: form.name, okText: '生成密钥',
       fields: [{ label: '权限范围', value: scopesText(form.scopes) }, { label: '绑定身份', value: bindText(formBinding.value) }, { label: '有效期', value: LIFE.find((x) => x.value === form.life)?.label ?? '' }],
-      impact: '密钥将立即生效，明文仅本次显示；只允许当前身份已获授权的元数据 GET 接口。' });
-    if (!ok || readonly.value || context !== JSON.stringify(currentApiContext()) || !meta.value?.binding.userId) return;
+      impact: '密钥按所选权限范围立即生效，仅能在生成窗口复制；重新取得当前授权快照并绑定当前本体。复制配置不会吊销原密钥，切换验证后请单独吊销旧密钥。' });
+    if (!ok || readonly.value || busy.value || !canCreate.value || confirmedForm !== JSON.stringify(form) || !createOpen.value || context !== JSON.stringify(currentApiContext()) || !meta.value?.binding.userId) return;
     const binding = form.principal === '服务账号' && form.saId
       ? { kind: '服务账号' as const, serviceAccountId: form.saId }
       : { kind: '用户' as const, userId: meta.value.binding.userId as string };
@@ -265,14 +278,14 @@ async function create() {
 }
 async function copySecret() {
   if (!secret.value) return;
-  try { await navigator.clipboard.writeText(secret.value.text); message.success('已复制到剪贴板'); } catch { message.warning('浏览器不允许自动复制，请手动选中复制'); }
+  try { await navigator.clipboard.writeText(secret.value.text); message.success('已复制到剪贴板'); } catch { message.warning('复制失败，请检查浏览器剪贴板权限后重试，当前显示的是掩码'); }
 }
 async function closeCreate() {
   if (busy.value) return;
   if (secret.value && !saved.value) {
     const ok = await confirm.ask({
-      title: '关闭后不能再查看密钥', target: `${secret.value.key.name}（${mask(secret.value.key)}）`, okText: '仍然关闭', danger: true,
-      impact: '密钥明文只显示这一次，平台不保存明文。没保存的话，只能吊销后重新生成。',
+      title: '关闭后不能再复制密钥', target: `${secret.value.key.name}（${mask(secret.value.key)}）`, okText: '仍然关闭', danger: true,
+      impact: '密钥仅能在本窗口复制，平台不保存明文。请妥善保存；未保存就关闭后，需轮换或重新签发。',
     });
     if (!ok) return;
   } else if (formDirty.value && !(await confirmDiscard())) return;
@@ -280,18 +293,23 @@ async function closeCreate() {
 }
 // 调整授权与配额（PATCH；权限范围只能收窄，白名单 / 限流配额可改）
 const policyKey = ref<RemoteKey | null>(null);
-const policy = reactive({ scopes: [] as string[], limitActions: false, actionTypes: [] as string[], limitEvents: false, eventTypes: [] as string[], limitFunctions: false, functionTypes: [] as string[], rate: null as number | null, quota: null as number | null });
+const policy = reactive({ name: '', note: '', ip: '', changeExpiry: false, expiry: '', scopes: [] as string[], limitActions: false, actionTypes: [] as string[], limitEvents: false, eventTypes: [] as string[], limitFunctions: false, functionTypes: [] as string[], rate: null as number | null, quota: null as number | null });
 function openPolicy(k: RemoteKey) {
   policyKey.value = k;
-  Object.assign(policy, { scopes: [...k.scopes], limitActions: k.actionTypes != null, actionTypes: [...(k.actionTypes ?? [])], limitEvents: k.eventTypes != null,
+  Object.assign(policy, { name: k.name, note: k.note ?? '', ip: k.ipAllow.join('\n'), changeExpiry: false, expiry: '', scopes: [...k.scopes], limitActions: k.actionTypes != null, actionTypes: [...(k.actionTypes ?? [])], limitEvents: k.eventTypes != null,
     eventTypes: [...(k.eventTypes ?? [])], limitFunctions: k.functionTypes != null, functionTypes: [...(k.functionTypes ?? [])], rate: k.ratePerMinute ?? null, quota: k.quotaPerDay ?? null });
 }
 async function savePolicy() {
   const k = policyKey.value;
   if (!k || readonly.value || busy.value) return;
   if (!policy.scopes.length) { message.error('至少保留一项权限范围'); return; }
+  if (!/^[a-z0-9][a-z0-9-]{2,39}$/.test(policy.name)) { message.error('名称须为小写字母、数字和短横线，3–40 个字符'); return; }
+  const expiry = policy.changeExpiry ? new Date(policy.expiry) : null;
+  if (expiry && (!Number.isFinite(expiry.getTime()) || expiry.getTime() <= Date.now())) { message.error('请填写晚于当前时间的到期时间'); return; }
   const body: KeyPatch = {
-    scopes: [...policy.scopes], actionTypes: policy.limitActions ? [...policy.actionTypes] : null, eventTypes: policy.limitEvents ? [...policy.eventTypes] : null, functionTypes: policy.scopes.includes("functions:invoke") && policy.limitFunctions ? [...policy.functionTypes] : null,
+    version: k.version, name: policy.name, note: policy.note, ipAllow: policy.ip.split(/\s+/).filter(Boolean),
+    ...(expiry ? { expiresAt: expiry.toISOString() } : {}),
+    scopes: [...policy.scopes], actionTypes: policy.scopes.some(s => s.startsWith('actions:')) && policy.limitActions ? [...policy.actionTypes] : null, eventTypes: policy.scopes.includes('events:ingest') && policy.limitEvents ? [...policy.eventTypes] : null, functionTypes: policy.scopes.includes("functions:invoke") && policy.limitFunctions ? [...policy.functionTypes] : null,
     ratePerMinute: policy.rate || null, quotaPerDay: policy.quota || null,
   };
   const context = JSON.stringify(currentApiContext());
@@ -299,9 +317,30 @@ async function savePolicy() {
   try {
     const result = await updateApiKey(k.id, body);
     if (context !== JSON.stringify(currentApiContext())) return;
-    if (remoteDetail.value?.id === k.id) remoteDetail.value = result as unknown as ApiKey;
+    if (q('key') === k.id) { remoteDetail.value = result as unknown as ApiKey; detailError.value = ''; }
     policyKey.value = null; await reload(); message.success(`已更新：${k.name}`);
   } catch (e) { message.error(`更新失败：${errorText(e)}`); }
+  finally { busy.value = false; }
+}
+
+async function rotate(k: RemoteKey) {
+  if (readonly.value || busy.value) return;
+  const context = JSON.stringify(currentApiContext());
+  const ok = await confirm.ask({ title: '轮换 API 密钥', target: `${k.name}（${mask(k as unknown as ApiKey)}）`, okText: '轮换并停用旧密钥', danger: true, irreversible: true, dangerLabel: '旧密钥将立即失效，轮换提交后不能撤销',
+    impact: '轮换提交后旧密钥立即失效，新密钥仅能在生成窗口复制。权限、绑定本体和到期时间保持原值。需要平滑切换时请先复制配置新建，验证调用方切换成功后再吊销旧密钥。' });
+  if (!ok || readonly.value || context !== JSON.stringify(currentApiContext())) return;
+  busy.value = true;
+  try {
+    const result = await rotateApiKey(k.id, k.version);
+    if (context !== JSON.stringify(currentApiContext())) return;
+    // Open the existing one-time secret surface before assigning the returned credential.
+    await setQuery({ key: undefined, form: 'create', from: undefined });
+    await nextTick();
+    if (context !== JSON.stringify(currentApiContext())) return;
+    const { secret: text, ...key } = result;
+    secret.value = { key: key as unknown as ApiKey, text }; saved.value = false;
+    await reload();
+  } catch (e) { message.error(`轮换失败：${errorText(e)}；若连接中断，请先核对调用状态，勿自动重复轮换`); }
   finally { busy.value = false; }
 }
 
@@ -339,17 +378,19 @@ async function addAccount() {
 }
 async function revokeAccount(a: ServiceAccount) {
   if (!canManageSa.value || busy.value) return;
+  const context = JSON.stringify(currentApiContext());
   const ok = await confirm.ask({
     title: '吊销服务账号', target: `${a.name}（${a.id}）`, okText: '吊销', danger: true, irreversible: true,
     fields: [{ label: '服务角色', value: a.roleName }, { label: '有效密钥', value: `${a.activeKeys} 个` }],
     impact: '吊销立即生效：这个服务账号的全部有效密钥一起吊销，调用返回 401。不能恢复。',
   });
-  if (!ok) return;
+  if (!ok || !canManageSa.value || context !== JSON.stringify(currentApiContext())) return;
   busy.value = true;
   try {
     await revokeServiceAccount(a.id);
+    if (context !== JSON.stringify(currentApiContext())) return;
     message.success(`已吊销：${a.name}`);
-    await Promise.all([loadAccounts(), refreshMeta(), reload()]);
+    await Promise.all([loadAccounts(), refreshMeta(), reload(), loadDetail()]);
   } catch (e) { message.error(`吊销失败：${errorText(e)}`); }
   finally { busy.value = false; }
 }
@@ -359,7 +400,7 @@ let metaSeq = 0;
 watch(() => JSON.stringify(currentApiContext()), async () => {
   if (!real) return;
   const seq = ++metaSeq;
-  meta.value = null; metaError.value = ''; secret.value = null;
+  meta.value = null; metaError.value = ''; secret.value = null; policyKey.value = null;
   try { const result = await apiKeysMeta(); if (seq === metaSeq) meta.value = result; }
   catch (e) { if (seq === metaSeq) metaError.value = `身份与授权加载失败：${errorText(e)}`; }
 }, { immediate: true });
@@ -384,7 +425,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
       </a-space>
     </div>
     <div class="ak-table" :class="{ 'paged-scroll': pq.overflow.value }">
-      <a-table size="small" row-key="id" :columns="columns" :data-source="paged.items" :pagination="false" :loading="loading" :locale="{ emptyText: loadError || '没有符合条件的密钥' }">
+      <a-table size="small" row-key="id" :columns="columns" :data-source="paged.items" :pagination="false" :loading="loading" :scroll="{ x: 1710 }" :locale="{ emptyText: loadError || '没有符合条件的密钥' }">
         <template #bodyCell="{ column, record }">
           <span v-if="column.key === 'name'" class="ak-name"><a class="num" @click="setQuery({ key: record.id })">{{ record.name }}</a><a-tag v-if="record.env === '测试'" class="ak-env">测试</a-tag></span>
           <span v-else-if="column.key === 'key'" class="num c-2">{{ mask(record) }}</span>
@@ -401,7 +442,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
           <a-space v-else-if="column.key === 'op'" :size="12">
             <a @click="setQuery({ key: record.id })">详情</a>
             <a-tooltip v-if="record.status !== '已吊销'" :title="reason"><a :class="{ 'ak-dis': readonly }" @click="!readonly && revoke(record)">吊销</a></a-tooltip>
-            <a-tooltip v-if="record.status !== '有效'" :title="reason"><a :class="{ 'ak-dis': readonly }" @click="!readonly && setQuery({ form: 'create', from: record.id })">复制配置新建</a></a-tooltip>
+            <a-tooltip :title="reason"><a :class="{ 'ak-dis': readonly }" @click="!readonly && setQuery({ form: 'create', from: record.id })">复制配置新建</a></a-tooltip>
           </a-space>
         </template>
       </a-table>
@@ -434,16 +475,17 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
         <a-descriptions-item label="身份与数据范围" :span="2"><a-tooltip :title="bindText(detail.binding)"><span class="ak-ell">{{ bindText(detail.binding) }}</span></a-tooltip></a-descriptions-item>
         <a-descriptions-item v-if="detail.scopes.includes('动作执行')" label="动作发起人" :span="2">{{ keyActor(detail) }}<span class="t-12 c-3"> · 动作中心执行记录的发起人这样显示</span></a-descriptions-item>
         <a-descriptions-item label="IP 白名单" :span="2"><span class="num">{{ detail.ipAllow.join('、') || '不限制' }}</span></a-descriptions-item>
+        <a-descriptions-item v-if="real" label="备注" :span="2">{{ rk(detail).note || '—' }}</a-descriptions-item>
         <a-descriptions-item label="创建"><span class="num">{{ detail.createdAt }}</span> · {{ detail.creator }}</a-descriptions-item>
         <a-descriptions-item label="最近使用"><span class="num">{{ detail.lastUsed ? `${detail.lastUsed} · ${detail.lastIp}` : '从未使用' }}</span></a-descriptions-item>
         <a-descriptions-item v-if="detail.revokedAt" label="吊销" :span="2"><span class="num">{{ detail.revokedAt }}</span> · {{ detail.revokedBy }}</a-descriptions-item>
       </a-descriptions>
       <div class="t-14 fw-600 c-1 ak-h">最近调用</div>
       <a-table size="small" row-key="time" :pagination="false" :data-source="cpaged.items" :locale="{ emptyText: '没有调用记录' }"
-        :columns="[{ title: '时间', key: 'time', width: 170 }, { title: '接口', dataIndex: 'api', key: 'api', ellipsis: true }, { title: '状态码', key: 'code', width: 80 }, { title: '耗时', key: 'ms', width: 80, align: 'right' }]">
+        :columns="[{ title: '时间', key: 'time', width: 170 }, { title: '接口', dataIndex: 'api', key: 'api', ellipsis: true }, { title: '来源 IP', dataIndex: 'ip', key: 'ip', width: 120 }, { title: '状态码', key: 'code', width: 80 }, { title: '耗时', key: 'ms', width: 80, align: 'right' }]">
         <template #bodyCell="{ column, record }">
           <span v-if="column.key === 'time'" class="num c-2">{{ record.time }}</span>
-          <span v-else-if="column.key === 'code'" class="num" :class="record.code === 200 ? 'tl-normal' : 'tl-failed'">{{ record.code }}</span>
+          <span v-else-if="column.key === 'code'" class="num" :class="record.code >= 200 && record.code < 300 ? 'tl-normal' : 'tl-failed'">{{ record.code }}</span>
           <span v-else-if="column.key === 'ms'" class="num">{{ record.ms }} ms</span>
         </template>
       </a-table>
@@ -452,7 +494,8 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
     <template #footer>
       <div class="ak-foot">
         <a-button @click="setQuery({ key: undefined })">关闭</a-button>
-        <a-tooltip v-if="real && detail && detail.status !== '已吊销'" :title="reason"><a-button :disabled="readonly || busy" @click="openPolicy(rk(detail))">调整授权与配额</a-button></a-tooltip>
+        <a-tooltip v-if="real && detail && detail.status !== '已吊销'" :title="reason"><a-button :disabled="readonly || busy" @click="openPolicy(rk(detail))">维护配置</a-button></a-tooltip>
+        <a-button v-if="real && detail && ['有效', '即将过期'].includes(detail.status)" :disabled="readonly || busy" @click="rotate(rk(detail))">轮换密钥</a-button>
         <a-tooltip v-if="detail && detail.status !== '已吊销'" :title="reason"><a-button danger :disabled="readonly" @click="revoke(detail)">吊销</a-button></a-tooltip>
       </div>
     </template>
@@ -462,7 +505,10 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
   <a-drawer :open="createOpen" :width="560" :title="secret ? '密钥已生成' : '新建 API 密钥'" :mask-closable="!secret && !busy" :closable="!busy" @close="closeCreate">
     <template v-if="!secret">
       <a-alert v-if="real && metaError" type="error" show-icon :message="metaError" />
-      <a-form layout="vertical" :model="form" :disabled="busy">
+      <a-alert v-if="cloneBlocked" type="warning" show-icon :message="cloneBlocked" class="ak-mb8" />
+      <a-form layout="vertical" :model="form" :disabled="busy || !!cloneBlocked">
+        <a-form-item v-if="real" label="绑定本体" help="仅绑定当前本体；更换本体请先切换空间，再明确重新签发。"><span class="num">{{ currentApiContext().ontologyId ?? 1 }}</span></a-form-item>
+        <a-form-item v-if="cloneSourceScope" label="复制来源本体"><span class="num">{{ cloneSourceScope }}</span></a-form-item>
         <a-form-item label="名称" required :validate-status="form.name && (!nameOk || nameTaken) ? 'error' : undefined"
           :help="form.name && !nameOk ? '小写字母、数字和短横线，3–40 个字符' : nameTaken ? '已有同名的有效密钥' : '建议写调用方系统名，例如 bi-sync-prod'">
           <a-input v-model:value="form.name" placeholder="例如 bi-sync-prod" />
@@ -485,7 +531,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
             <a-switch v-model:checked="form.limitActions" size="small" />
             <a-select v-if="form.limitActions" v-model:value="form.actionTypes" mode="tags" class="num ak-mt8" placeholder="输入动作类型编号后回车" :token-separators="[',', ' ']" />
           </a-form-item>
-          <a-form-item label="事件类型白名单" help="开启后只允许写入列出的事件类型编号">
+          <a-form-item label="事件类型白名单" help="开启后只允许写入列出的事件类型编号；空列表全部拒绝。外部事件接入请选择事件写入权限。">
             <a-switch v-model:checked="form.limitEvents" size="small" />
             <a-select v-if="form.limitEvents" v-model:value="form.eventTypes" mode="tags" class="num ak-mt8" placeholder="输入事件类型编号后回车" :token-separators="[',', ' ']" />
           </a-form-item>
@@ -494,7 +540,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
             <a-select v-if="form.limitFunctions" v-model:value="form.functionTypes" mode="tags" class="num ak-mt8" placeholder="输入函数编号后回车" :token-separators="[',', ' ']" />
           </a-form-item>
           <a-form-item label="限流与配额" help="留空表示不限制；超出返回 429">
-            <a-space><a-input-number v-model:value="form.rate" :min="1" :max="100000" placeholder="每分钟" class="num" /><a-input-number v-model:value="form.quota" :min="1" :max="100000000" placeholder="每日" class="num" /></a-space>
+            <a-space><a-space direction="vertical"><label for="ak-create-rate">每分钟请求数</label><a-input-number id="ak-create-rate" v-model:value="form.rate" :min="1" :max="100000" aria-label="每分钟请求数" class="num" /></a-space><a-space direction="vertical"><label for="ak-create-quota">每日请求数</label><a-input-number id="ak-create-quota" v-model:value="form.quota" :min="1" :max="100000000" aria-label="每日请求数" class="num" /></a-space></a-space>
           </a-form-item>
         </template>
         <template v-else>
@@ -522,11 +568,11 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
     <template v-else>
       <div class="ak-once">
         <ExclamationCircleOutlined class="c-2" />
-        <span class="t-14 c-1">密钥明文只显示这一次，平台不保存明文。请现在复制并保存到调用方的密钥管理里。</span>
+        <span class="t-14 c-1">密钥仅能在本窗口复制，请妥善保存到调用方的密钥管理里。平台不保存明文。</span>
       </div>
       <div class="t-12 c-2 ak-lbl">{{ secret.key.name }} · {{ secret.key.env }} · {{ scopesText(secret.key.scopes) }} · {{ bindText(secret.key.binding) }}</div>
       <div class="ak-secret">
-        <a-input :value="secret.text" readonly class="num" />
+        <a-input :value="mask(secret.key)" readonly aria-label="密钥掩码" class="num" />
         <a-button type="primary" @click="copySecret"><CopyOutlined />复制</a-button>
       </div>
       <a-descriptions :column="1" bordered size="small" class="ak-desc ak-mt">
@@ -541,7 +587,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
         <template v-if="!secret">
           <span v-if="tried && formErrors.length" class="t-12 tl-failed ak-err">{{ formErrors[0] }}{{ formErrors.length > 1 ? ` 等 ${formErrors.length} 项` : '' }}</span>
           <a-button :disabled="busy" @click="closeCreate">取消</a-button>
-          <a-button type="primary" :loading="busy" :disabled="readonly || busy || (tried && !canCreate)" @click="create">生成密钥</a-button>
+          <a-button type="primary" :loading="busy" :disabled="readonly || busy || !!cloneBlocked || (tried && !canCreate)" @click="create">生成密钥</a-button>
         </template>
         <a-button v-else type="primary" @click="closeCreate">完成</a-button>
       </div>
@@ -549,17 +595,25 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
   </a-drawer>
 
   <!-- 调整授权与配额 -->
-  <a-modal :open="!!policyKey" :title="policyKey ? `调整授权与配额 · ${policyKey.name}` : ''" :confirm-loading="busy" ok-text="保存" @ok="savePolicy" @cancel="policyKey = null">
-    <a-form v-if="policyKey" layout="vertical">
+  <a-modal :open="!!policyKey" :title="policyKey ? `维护密钥 · ${policyKey.name}` : ''" :confirm-loading="busy" ok-text="保存" @ok="savePolicy" @cancel="!busy && (policyKey = null)">
+    <a-form v-if="policyKey" layout="vertical" :disabled="busy">
+      <a-form-item label="名称" required help="小写字母、数字和短横线，3–40 个字符"><a-input v-model:value="policy.name" :maxlength="40" /></a-form-item>
+      <a-form-item label="备注"><a-input v-model:value="policy.note" :maxlength="512" /></a-form-item>
+      <a-form-item label="绑定本体"><span class="num">{{ policyKey.ontologyIds?.join('、') || '—' }}</span><div class="t-12 c-3">更换本体或扩大授权请复制配置重新签发。</div></a-form-item>
+      <a-form-item label="提前到期" help="按本机时区；仅可提前。延期或恢复已过期密钥请重新签发。">
+        <a-checkbox v-model:checked="policy.changeExpiry">设置新的到期时间</a-checkbox>
+        <a-input v-if="policy.changeExpiry" v-model:value="policy.expiry" type="datetime-local" class="ak-mt8" />
+      </a-form-item>
+      <a-form-item label="IP 白名单" help="每行一个 IP 或网段；已有范围只可收窄，移除限制请重新签发。"><a-textarea v-model:value="policy.ip" :rows="2" class="num" /></a-form-item>
       <a-form-item label="权限范围" help="只能收窄；要增加范围请新建密钥">
         <a-checkbox-group v-model:value="policy.scopes" :options="policyKey.scopes.map((v) => ({ value: v, label: scopeLabel(v) }))" />
       </a-form-item>
-      <a-form-item label="动作类型白名单">
-        <a-switch v-model:checked="policy.limitActions" size="small" />
+      <a-form-item v-if="policy.scopes.some(s => s.startsWith('actions:'))" label="动作类型白名单" help="已有白名单只可收窄；空列表全部拒绝。扩大授权请重新签发。">
+        <a-switch v-model:checked="policy.limitActions" size="small" :disabled="policyKey.actionTypes != null" />
         <a-select v-if="policy.limitActions" v-model:value="policy.actionTypes" mode="tags" class="num ak-mt8" :token-separators="[',', ' ']" />
       </a-form-item>
-      <a-form-item label="事件类型白名单">
-        <a-switch v-model:checked="policy.limitEvents" size="small" />
+      <a-form-item v-if="policy.scopes.includes('events:ingest')" label="事件类型白名单" help="已有白名单只可收窄；空列表全部拒绝。扩大授权请重新签发。">
+        <a-switch v-model:checked="policy.limitEvents" size="small" :disabled="policyKey.eventTypes != null" />
         <a-select v-if="policy.limitEvents" v-model:value="policy.eventTypes" mode="tags" class="num ak-mt8" :token-separators="[',', ' ']" />
       </a-form-item>
       <a-form-item v-if="policy.scopes.includes('functions:invoke')" label="函数白名单" help="函数编号适用于密钥绑定本体；已有白名单只可收窄，增加函数请新建密钥">
@@ -567,7 +621,7 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
         <a-select v-if="policy.limitFunctions" v-model:value="policy.functionTypes" mode="tags" class="num ak-mt8" :token-separators="[',', ' ']" />
       </a-form-item>
       <a-form-item label="限流与配额" help="留空表示不限制">
-        <a-space><a-input-number v-model:value="policy.rate" :min="1" :max="100000" placeholder="每分钟" /><a-input-number v-model:value="policy.quota" :min="1" :max="100000000" placeholder="每日" /></a-space>
+        <a-space><a-space direction="vertical"><label for="ak-policy-rate">每分钟请求数</label><a-input-number id="ak-policy-rate" v-model:value="policy.rate" :min="1" :max="100000" aria-label="每分钟请求数" /></a-space><a-space direction="vertical"><label for="ak-policy-quota">每日请求数</label><a-input-number id="ak-policy-quota" v-model:value="policy.quota" :min="1" :max="100000000" aria-label="每日请求数" /></a-space></a-space>
       </a-form-item>
     </a-form>
   </a-modal>
@@ -601,10 +655,13 @@ watch(() => JSON.stringify(currentApiContext()), async () => {
 <style scoped>
 .ak-mr8 { margin-right: 8px; }
 .ak-mt8 { margin-top: 8px; }
-.ak { flex: 1; min-height: 0; }
+.ak { flex: 1; min-width: 0; min-height: 0; }
+.ak .panel-head { height: auto; min-height: 44px; flex-wrap: wrap; gap: 8px; }
+.ak .panel-head :deep(.ant-space) { flex-wrap: wrap; max-width: 100%; }
 .ak-empty { margin: auto; padding: 32px; }
 .ak-sum { display: inline-flex; align-items: baseline; gap: 16px; }
-.ak-table { flex: 1; min-height: 0; padding: 0 16px; }
+.ak-table { flex: 1; min-width: 0; min-height: 0; padding: 0 16px; overflow: auto; }
+.ak-table :deep(.ant-table-content > table) { min-width: 1710px !important; }
 .ak-pager { padding: 4px 16px 8px; }
 .ak-w120 { width: 120px; }
 .ak-table :deep(td) { white-space: nowrap; }

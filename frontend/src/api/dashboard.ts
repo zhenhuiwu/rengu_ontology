@@ -26,8 +26,8 @@ export async function fetchKpis(ids: string[], cutoff?: string): Promise<{ items
   return { dataAsOf: r.dataAsOf, items: r.items.map((m) => ({ id: m.id, name: m.name, unit: m.unit, value: m.value ?? 0, prev: m.prev ?? 0 })) };
 }
 
-export function fetchStoreRanking(q: { from?: string; to?: string; page: number; size: number }): Promise<StoreRankingDto> {
-  return api.get<StoreRankingDto>('/stores/ranking', { query: { ...q } });
+export function fetchStoreRanking(q: { from?: string; to?: string; page: number; size: number }, signal?: AbortSignal): Promise<StoreRankingDto> {
+  return api.get<StoreRankingDto>('/stores/ranking', { query: { ...q }, signal });
 }
 
 

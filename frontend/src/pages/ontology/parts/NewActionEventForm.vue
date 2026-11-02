@@ -8,6 +8,7 @@ import { useReadonly } from '@/composables/useReadonly';
 import { useConfirmStore } from '@/stores/confirm';
 import { applyModelChange, fetchCurrentAfterWrite } from '@/api/static';
 import ActionExecutionEditor from './ActionExecutionEditor.vue';
+import HttpEndpointSelect from './HttpEndpointSelect.vue';
 import PayloadSchemaEditor from '../PayloadSchemaEditor.vue';
 import type { ActionParam, ActionType } from '@/mock/actionEvent';
 
@@ -72,6 +73,10 @@ const choices = (field: Field) => field.k === 'owner' ? owners.value.map(u => ({
     : field.k === 'ruleId' ? rules.value.map(r => ({ value: r.id, label: `${r.id} · ${r.name}` })) : field.options;
 const rowKey = (section: string, row: Record<string, any>) => section === 'config' ? 'cfg'
   : section === 'edits' ? `${row.op}:${row.obj}` : String(row.api ?? row.target ?? row.name ?? '');
+const rowChoices = (section: string | number, field: Field) => props.kind === 'action' && section === 'params' && field.k === 'type' ? [
+  ...(field.options ?? []).filter(option => !String(option.value).startsWith('对象引用')),
+  ...objects.value.map(o => ({ value: `对象引用 · ${o.api}`, label: `对象引用 · ${o.name}（${o.api}）` })),
+] : field.options;
 function validSchema(node: any, depth = 0): boolean {
   if (depth > 4) return false;
   if (node.type === '对象') {
@@ -239,13 +244,14 @@ async function close() {
             <ActionExecutionEditor v-if="kind === 'action' && (section === 'edits' || section === 'effects')" ref="executionEditors" v-model="rows[section][index]" :section="section" :action="newAction" :params="(rows.params ?? []) as ActionParam[]" />
             <a-form v-else layout="vertical" class="nt-grid" :disabled="readonly || busy || loading || !validContext">
               <a-form-item v-for="f in spec.fields()" :key="f.k" :label="f.label" :required="f.required">
-                <a-select v-if="f.kind === 'select'" v-model:value="row[f.k]" :options="f.options" />
+                <HttpEndpointSelect v-if="kind === 'action' && section === 'config' && f.k === 'endpoint'" v-model="rows[section][index]" />
+                <a-select v-else-if="f.kind === 'select'" v-model:value="row[f.k]" :options="rowChoices(section, f)" />
                 <a-switch v-else-if="f.kind === 'switch'" v-model:checked="row[f.k]" />
                 <a-textarea v-else-if="f.kind === 'textarea'" v-model:value="row[f.k]" :rows="2" />
                 <a-input v-else v-model:value="row[f.k]" :disabled="section === 'config' && !row.sysId" />
               </a-form-item>
             </a-form>
-            <PayloadSchemaEditor v-if="kind === 'event' && section === 'payload'" :node="row" />
+            <PayloadSchemaEditor v-if="kind === 'event' && section === 'payload'" :node="row" :disabled="readonly || busy || loading || !validContext" />
           </div>
           <a-button :disabled="readonly || busy || loading || (section === 'config' && rows[section]?.length > 0)" @click="rows[section].push(section === 'config' ? { sysId: null, endpoint: '—', idemKey: '' } : spec.blank())">添加{{ spec.title }}</a-button>
         </a-tab-pane>

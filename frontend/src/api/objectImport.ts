@@ -1,6 +1,6 @@
 import { apiClient } from './http';
 import { definitionContext } from './definitionForms';
-import { fetchCR, staticContextKey, invalidateStaticAfterWrite } from './static';
+import { staticContextKey, invalidateStaticAfterWrite } from './static';
 import type { DefinitionProperty } from './definitionForms';
 export interface ImportObject { table: string; id: string; name: string; api: string; group: string; datasource: string; pk: string; titleField?: string; desc: string; owner?: string; props: DefinitionProperty[] }
 export interface ImportPreview { datasourceId: string; schema: string; tables: { name: string; comment: string; pk: string[]; uniqueSets: string[][]; columns: { name: string; type: string; nullable: boolean; comment: string }[]; fks: { columns: string[]; refTable: string; refColumns: string[] }[] }[]; proposal: { objectTypes: ImportObject[]; linkTypes: { id: string; name: string; from: string; to: string; [key: string]: unknown }[] }; warnings: string[]; fingerprint: string; generator: string }
@@ -43,10 +43,8 @@ export async function mappingObjectChoices() {
     if (rows.length >= result.total || !result.items.length) return rows;
   }
 }
-export async function commitTableMapping(id: string, schema: string, table: string, objectId: string, opts: { join?: string; title?: string; desc?: string }) {
+export async function commitTableMapping(id: string, schema: string, table: string, objectId: string, lockVersion: number) {
   const ctx = definitionContext();
-  const head = opts.join ? await fetchCR(opts.join, ctx.options) : undefined;
-  check(ctx.key);
-  const result = await api.put<{ crId: string; lockVersion: number }>(`/datasources/${encodeURIComponent(id)}/tables/${encodeURIComponent(schema)}/${encodeURIComponent(table)}/mapping`, { objectId, crId: opts.join, lockVersion: head?.lockVersion, title: opts.title, reason: opts.desc }, ctx.options);
-  check(ctx.key); return result;
+  const result = await api.post<{ targetId: string; ver: string }>(`/datasources/${encodeURIComponent(id)}/tables/${encodeURIComponent(schema)}/${encodeURIComponent(table)}/mapping:apply`, { objectId, lockVersion }, ctx.options);
+  check(ctx.key); invalidateStaticAfterWrite(result.ver); return result;
 }

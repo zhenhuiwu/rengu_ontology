@@ -7,6 +7,7 @@ import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import { useAppStore } from '@/stores/app';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import { fitColumns } from '@/tableColumns';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { useConfirmStore } from '@/stores/confirm';
@@ -59,17 +60,17 @@ if (real) {
 onBeforeUnmount(() => { ++listSeq; });
 const paged = computed(() => (live.value ? remote.value : paginate(rows.value, { page: pq.page.value, size: pq.size.value })));
 
-const cols = [
+const cols = fitColumns([
   { title: '排名', key: 'rank', width: 60, align: 'right' },
   { title: '问题', key: 'question', width: 260, ellipsis: true },
   { title: '命中次数', key: 'hits', width: 90, align: 'right' },
   { title: '提问人数', key: 'users', width: 90, align: 'right' },
   { title: '当前理解 · 指标', key: 'metric', width: 230 },
-  { title: '语义计划摘要', key: 'plan', ellipsis: true },
+  { title: '语义计划摘要', key: 'plan', width: 220, ellipsis: true },
   { title: '回答一致率', key: 'cons', width: 100, align: 'right' },
   { title: '最近提问', key: 'last', width: 110 },
   { title: '认证', key: 'cert', width: 160 },
-];
+]);
 const certOf = (f: FreqQ) => (live.value ? (f.certId ? { status: (f as QaFreq).certStatus ?? '' } : undefined) : tuning.certs.find((c) => c.id === f.certId));
 const openCert = (id: string) => setQuery({ tab: 'cert', cq: id });
 

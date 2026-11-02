@@ -47,8 +47,9 @@ const option = computed(() => ({
 </template>
 
 <style scoped>
-.qa-result { margin: 0 40px 10px 0; background: var(--g1); }
-.qa-result-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: var(--border); border-bottom: 0; }
+.qa-result { min-width: 0; margin: 0 40px 10px 0; background: var(--g1); }
+.qa-result-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: var(--border); border-bottom: 0; }
+.qa-result :deep(.ant-table-content > table) { width: max-content !important; min-width: 100% !important; table-layout: auto !important; }
 .qa-result-chart { height: 320px; border: var(--border); }
 .qa-result-hint { padding: 10px 12px; color: var(--g8); }
 </style>

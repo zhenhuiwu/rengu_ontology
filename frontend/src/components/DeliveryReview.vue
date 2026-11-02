@@ -5,7 +5,8 @@ import { currentApiContext } from '@/api/http';
 import { useConfirmStore } from '@/stores/confirm';
 import AppPagination from './AppPagination.vue';
 import ObjRef from './ObjRef.vue';
-import { decisionLabels, deliveryLabels, historyLabels } from './deliveryPresentation';
+import DeliveryErrorDetails from './DeliveryErrorDetails.vue';
+import { decisionLabels, deliveryErrorLabels, deliveryLabels, historyLabels } from './deliveryPresentation';
 
 const props = defineProps<{ deliveryId: string | null }>();
 const emit = defineEmits<{ close: []; changed: [] }>();
@@ -69,7 +70,10 @@ async function submit() {
           <a-descriptions-item label="订阅方">{{ detail.name }}</a-descriptions-item>
           <a-descriptions-item label="状态">{{ deliveryLabels[detail.state] ?? detail.state }}</a-descriptions-item>
           <a-descriptions-item label="实际尝试">{{ detail.attempts }} 次</a-descriptions-item>
-          <a-descriptions-item label="原原因" :span="2">{{ detail.error ?? '—' }}</a-descriptions-item>
+          <a-descriptions-item v-if="detail.typeVersion" label="事件定义版本">{{ detail.typeVersion }}</a-descriptions-item>
+          <a-descriptions-item v-if="detail.ontologyVersion" label="本体版本">{{ detail.ontologyVersion }}</a-descriptions-item>
+          <a-descriptions-item v-if="detail.subscriptionFilter" label="入站订阅过滤" :span="2">{{ detail.subscriptionFilter }}</a-descriptions-item>
+          <a-descriptions-item label="原原因" :span="2">{{ detail.errorMessage ?? (detail.error ? deliveryErrorLabels[detail.error] ?? detail.error : '—') }}<span v-if="detail.errorMessage && detail.error" class="t-12 c-3">（{{ detail.error }}）</span></a-descriptions-item>
           <a-descriptions-item label="幂等键" :span="2"><span class="review-wrap num">{{ detail.idempotencyKey }}</span></a-descriptions-item>
           <a-descriptions-item v-if="detail.result?.httpStatus" label="原HTTP回执">{{ detail.result.httpStatus }}</a-descriptions-item>
           <a-descriptions-item v-if="detail.result?.blockedByEventId" label="未决前序"><ObjRef kind="event" :id="detail.result.blockedByEventId">{{ detail.result.blockedByEventId }}</ObjRef></a-descriptions-item>
@@ -77,6 +81,7 @@ async function submit() {
           <a-descriptions-item v-if="(detail.result?.actionRunId || detail.result?.actionId)" label="已有动作"><ObjRef kind="action" :id="detail.result.actionRunId || detail.result.actionId!">{{ detail.result.actionRunId || detail.result.actionId }}</ObjRef></a-descriptions-item>
           <a-descriptions-item v-if="detail.result?.hitId" label="已有命中">{{ detail.result.hitId }}</a-descriptions-item>
         </a-descriptions>
+        <DeliveryErrorDetails :details="detail.errorDetails" />
         <section v-if="detail.canManage && !readonly && choices.length" class="review-section">
           <div class="fw-600 review-gap">记录核查结论</div>
           <a-form layout="vertical">
@@ -96,8 +101,9 @@ async function submit() {
               <a-list-item><div class="review-wrap">
                 <div>{{ historyLabels[item.kind] ?? item.kind }} · {{ deliveryLabels[item.state] ?? item.state }} · 第 {{ item.attempt }} 次</div>
                 <div class="t-12 c-3">{{ item.at }} · {{ item.actor }}</div>
-                <div v-if="item.error" class="t-12">{{ item.error }}</div>
-                <div v-if="item.detail.previousError" class="t-12">前次原因：{{ item.detail.previousError }}</div>
+                <div v-if="item.error" class="t-12">{{ deliveryErrorLabels[item.error] ?? item.error }}</div>
+                <DeliveryErrorDetails :details="item.detail.errorDetails" />
+                <div v-if="item.detail.previousError" class="t-12">前次原因：{{ deliveryErrorLabels[item.detail.previousError] ?? item.detail.previousError }}</div>
                 <div v-if="item.detail.decision">{{ decisionLabels[item.detail.decision as DeliveryDecision] ?? item.detail.decision }}</div>
                 <div v-if="item.detail.reason">理由：{{ item.detail.reason }}</div>
                 <div v-if="item.detail.evidence">证据：{{ item.detail.evidence }}</div>

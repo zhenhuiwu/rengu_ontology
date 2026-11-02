@@ -4,8 +4,8 @@ import { seeded } from './format';
 export type DsType = 'PostgreSQL' | '达梦 DM8' | '人大金仓 KingbaseES' | 'MySQL' | 'ERP';
 export type DsStatus = '正常' | '异常' | '未测试';
 export interface DsTest { time: string; ok: boolean; ms: number; msg: string }
-export interface DsSync { mode: '定时增量' | '定时全量' | '实时（CDC）' | '手动'; cron: string; cronText: string; window: string; cursorField: string; nextRun: string | null }
-export interface DsRun { time: string; result: '成功' | '延迟' | '失败'; rows: number; secs: number; msg: string }
+export interface DsSync { mode: '定时增量' | '定时全量' | '实时（CDC）' | '手动'; cron: string; cronText: string; window: string; cursorField: string; nextRun: string | null; mirrorScheduleEnabled?: boolean }
+export interface DsRun { time: string; result: '成功' | '延迟' | '失败'; rows: number; secs: number; msg: string; origin?: 'demo' | 'unverified' | 'actual' }
 export interface Datasource {
   id: string; name: string; type: DsType; host: string; port: number; database: string; user: string;
   /** 达梦：兼容模式；金仓：database_mode；ERP：系统 */

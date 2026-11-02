@@ -11,6 +11,7 @@ import { computed, watch } from 'vue';
 import { Empty } from 'ant-design-vue';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons-vue';
 import { fmtInt } from '@/mock/format';
+import type { PageSizeMode } from '@/composables/useAdaptivePageSize';
 
 const props = withDefaults(defineProps<{
   variant?: 'full' | 'simple' | 'cursor';
@@ -25,6 +26,7 @@ const props = withDefaults(defineProps<{
 
 const page = defineModel<number>('page', { default: 1 });
 const size = defineModel<number>('size', { default: 10 });
+const mode = defineModel<PageSizeMode | undefined>('mode');
 const emit = defineEmits<{ prev: []; next: [] }>();
 
 const pages = computed(() => Math.max(1, Math.ceil(props.total / Math.max(1, size.value))));
@@ -32,6 +34,11 @@ const sizeOptions = computed(() =>
   [...new Set([10, 20, 50, size.value])].sort((a, b) => a - b).map(String));
 const optionText = ({ value }: { value: string | number }) =>
   `${value} 条/页`;
+const adaptiveSizeOptions = computed(() => [
+  { value: 'auto', label: `自动 · ${size.value} 条/页` },
+  ...[...new Set([10, 20, 50, ...(typeof mode.value === 'number' ? [mode.value] : [])])]
+    .sort((a, b) => a - b).map(value => ({ value, label: `${value} 条/页` })),
+]);
 const totalText = computed(() => `共 ${fmtInt(props.total)} ${props.unit}`);
 const isEmpty = computed(() => props.variant !== 'cursor' && props.total === 0);
 // 筛选后总数变少时，页码自动收回到最后一页
@@ -44,13 +51,13 @@ function onFull(p: number, s: number) {
 
 <template>
   <a-empty v-if="isEmpty && empty" class="pg-empty" :image="Empty.PRESENTED_IMAGE_SIMPLE" :description="emptyText" />
-  <div v-else-if="!isEmpty" class="pg" :class="`pg-${variant}`">
+  <div v-else-if="!isEmpty" class="pg" :class="[`pg-${variant}`, { 'pg-adaptive': mode !== undefined }]">
     <template v-if="variant === 'full'">
       <slot name="extra" />
       <span class="pg-sp" />
       <a-pagination
         size="small" :current="page" :page-size="size" :total="total"
-        show-size-changer :show-quick-jumper="pages > 10" :page-size-options="sizeOptions"
+        :show-size-changer="mode === undefined" :show-quick-jumper="pages > 10" :page-size-options="sizeOptions"
         :build-option-text="optionText"
         :show-total="() => totalText" @change="onFull"
       />
@@ -73,6 +80,8 @@ function onFull(p: number, s: number) {
         <a-button size="small" :disabled="!hasNext" @click="emit('next')">下一页</a-button>
       </a-space>
     </template>
+    <a-select v-if="mode !== undefined" v-model:value="mode" class="pg-size" size="small" aria-label="每页条数"
+      :options="adaptiveSizeOptions" />
   </div>
 </template>
 
@@ -81,4 +90,7 @@ function onFull(p: number, s: number) {
 .pg-sp { flex: 1; }
 .pg-simple { display: inline-flex; align-items: center; gap: 4px; }
 .pg-empty { margin: 32px 0; }
+.pg-adaptive { flex-wrap: wrap; }
+.pg-size { width: 150px; flex: none; }
+.pg.pg-simple > .pg-size { width: 100%; }
 </style>

@@ -14,8 +14,8 @@ const enc = encodeURIComponent;
 
 /** 后台 ExtSystemOut：ExtSystem + 关联动作数（列表悬停文字用） */
 export type ExtSystemDto = Omit<ExtSystem, 'usage'> & { usage?: ExtSystem['usage'] | null; actionCount?: number };
-export interface LinkedActionTypeDto { id: string; name: string; group: string; status: string; endpoint: string }
-export interface ExtSystemDetailDto extends ExtSystemDto { actionTypes: LinkedActionTypeDto[] }
+export interface LinkedActionTypeDto { id: string; name: string; group: string; status: string; endpoint: string; httpEndpointId?: string | null }
+export interface ExtSystemDetailDto extends ExtSystemDto { lockVersion: number; actionTypes: LinkedActionTypeDto[] }
 /** 新建 / 编辑请求体（表单字段，id 由后台生成） */
 export type ExtSystemInput = Omit<ExtSystem, 'id'>;
 
@@ -31,6 +31,10 @@ export const getExtSystem = async (id: string) => clean(await api.get<ExtSystemD
 export const createExtSystem = async (body: ExtSystemInput) => clean(await api.post<ExtSystemDetailDto>('/ext-systems', body));
 /** PUT /ext-systems/{id}（文档 §3.1）；后台另留 POST 同义别名兼容旧前端 */
 export const updateExtSystem = async (id: string, body: ExtSystemInput) => clean(await api.put<ExtSystemDetailDto>(`/ext-systems/${enc(id)}`, body));
+export interface HttpEndpoint { id: string; name: string; description?: string | null; purpose: 'probe' | 'action'; method: 'GET' | 'POST' | 'PUT' | 'PATCH'; path: string; httpMapping: any | null }
+export interface HttpEndpointSet { version: number; endpoints: HttpEndpoint[] }
+export const getHttpEndpoints = (id: string) => api.get<HttpEndpointSet>(`/ext-systems/${enc(id)}/http-endpoints`);
+export const saveHttpEndpoints = (id: string, body: HttpEndpointSet) => api.put<HttpEndpointSet>(`/ext-systems/${enc(id)}/http-endpoints`, body);
 export interface ActionAuthorization { id: string; version: string; path: string }
 export const getActionAuthorizations = (id: string) => api.get<{ version: number; paths: string[]; actions: { id: string; name: string; version: string }[]; selected: ActionAuthorization[] }>(`/ext-systems/${enc(id)}/action-authorizations`);
 export const saveActionAuthorizations = (id: string, body: { version: number; actions: ActionAuthorization[] }) => api.put(`/ext-systems/${enc(id)}/action-authorizations`, body);

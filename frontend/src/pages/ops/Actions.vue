@@ -14,6 +14,7 @@ import { reviewFields, type ActionReview } from './actionReview';
 import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import { fitColumns } from '@/tableColumns';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import ObjRef from '@/components/ObjRef.vue';
 import StatusTimeline from '@/components/StatusTimeline.vue';
@@ -43,7 +44,7 @@ const REAL_API = dynamicApi.isReal();
 const live = computed(() => REAL_API);
 const readFail = (e: unknown) => fail(e);
 const app = useAppStore();
-/** 当前用户：mock 固定王敏；真接口时后台按 X-Demo-As 认人，前端取当前演示身份的姓名做同样的判断 */
+/** 当前用户：mock 固定王敏；真实接口由会话 Cookie 鉴权；前端仅显示当前登录用户，操作权限以服务端结果为准 */
 const ME = computed(() => REAL_API ? app.user.name : '王敏');
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(40 + tick).padStart(2, '0')}:00`; };
@@ -168,16 +169,16 @@ const notMineText = (a: ActionRecord) => live.value ? a.can?.reasons.confirm || 
 const phaseText = (a: ActionRecord) => a.dispatchPhase === 'queued' ? '待执行' : a.dispatchPhase === 'claimed' ? '调用中' : a.status === '结果未知' ? '结果未知 · 待对账' : a.status === '审批中' ? '历史待处理' : a.status;
 const timeline = computed(() => (current.value?.log ?? []).map((l: ActionLog) => ({ time: l.desc ? `${l.time} · ${l.desc}` : l.time, text: l.text, status: l.status })));
 
-const columns = [
+const columns = fitColumns([
   { title: '动作编号', key: 'id', width: 168 },
   { title: '动作', dataIndex: 'action', key: 'action', width: 120 },
-  { title: '对象', key: 'obj', ellipsis: true },
+  { title: '对象', key: 'obj', width: 160, ellipsis: true },
   { title: '来源', key: 'source', width: 180, ellipsis: true },
   { title: '外部系统', dataIndex: 'system', key: 'system', width: 84 },
   { title: '状态', key: 'status', width: 150 },
   { title: '发起人', dataIndex: 'initiator', key: 'initiator', width: 124, ellipsis: { showTitle: false } },
   { title: '提交时间', key: 'submittedAt', width: 168 },
-];
+]);
 
 function push(a: ActionRecord, l: ActionLog) { a.log.push(l); }
 
@@ -408,7 +409,7 @@ const terminalText = computed(() => {
   const a = current.value; if (!a) return '';
   if (a.status === '成功') return a.sysId ? `已完成 · ${a.system} 外部单号 ${a.extRef ?? '未记录'}` : '本体内部动作已完成';
   if (a.status === '已撤回') return '已撤回，不再执行';
-  if (a.status === '已对账') return a.reconcile === '外部未执行' ? '已对账 · 外部未执行，如仍需执行请重新发起' : `已对账 · 外部已成功（${a.extRef ?? '未记录外部单号'}）`;
+  if (a.status === '已对账') return a.reconcile === '外部未执行' ? `已对账 · 外部未执行${a.failReason ? `：${a.failReason}` : ''}，如仍需执行请重新发起` : `已对账 · 外部已成功（${a.extRef ?? '未记录外部单号'}）`;
   return '';
 });
 </script>
@@ -591,7 +592,7 @@ const terminalText = computed(() => {
 </template>
 
 <style scoped>
-.ac { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
+.ac { flex: 1; min-height: 0; min-width: 0; display: flex; gap: var(--gap); }
 .ac-list { flex: 1; }
 .ac-list > .panel-head { height: auto; min-height: 44px; padding-top: 8px; padding-bottom: 8px; flex-wrap: wrap; gap: 8px; }
 .ac-list > .panel-head > :deep(.ant-radio-group) { flex: none; white-space: nowrap; }
@@ -605,10 +606,16 @@ const terminalText = computed(() => {
 .ac-table :deep(.ac-row-active > td) { background: var(--brand-bg) !important; }
 .ac-pager { padding: 4px 16px 8px; }
 .ac-detail { width: 480px; flex: none; }
-.ac-body { flex: 1; padding: 12px 16px 0; }
+.ac-body { flex: 1; padding: 12px 16px 0; overflow-wrap: anywhere; }
+.ac-detail :deep(.ant-descriptions-view > table) { width: 100%; table-layout: fixed; }
+.ac-detail :deep(.ant-descriptions-item-label) { width: 96px; white-space: nowrap; }
+.ac-detail :deep(.ant-descriptions-item-content) { overflow-wrap: anywhere; word-break: break-word; }
+.ac-detail .ac-nowrap { white-space: normal; }
 .ac-out { margin-bottom: 8px; }
 .ac-sub { margin: 16px 0 4px; }
 .ac-tl :deep(.ant-timeline-item) { padding-bottom: 12px; }
+.ac-tl :deep(.stl-row) { display: block; white-space: normal; overflow-wrap: anywhere; }
+.ac-tl :deep(.stl-ell), .ac-tl :deep(.stl-time) { max-width: none; overflow: visible; text-overflow: clip; }
 .ac-pop { width: 300px; display: flex; flex-direction: column; gap: 8px; }
 .ac-radios { display: flex; flex-direction: column; gap: 4px; }
 .ac-unk { white-space: nowrap; }

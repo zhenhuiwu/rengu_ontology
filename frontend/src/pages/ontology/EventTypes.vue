@@ -20,6 +20,7 @@ import EventDeliveries from '@/components/EventDeliveries.vue';
 import DeliveryExceptions from '@/components/DeliveryExceptions.vue';
 import { useDrawer } from '@/composables/useDrawer';
 import { usePagedQuery } from '@/composables/usePagedQuery';
+import { useDebouncedRef } from '@/composables/useDebouncedRef';
 import { useUnsavedGuard } from '@/composables/useUnsavedGuard';
 import { useConfirmStore } from '@/stores/confirm';
 import { GRAY } from '@/theme';
@@ -52,32 +53,38 @@ const confirm = useConfirmStore();
 /* 左侧列表 */
 const source = ref('全部');
 const kw = ref('');
+const searchKw = useDebouncedRef(kw);
 const filtered = computed(() => EVENT_TYPES.filter((e) => (source.value === '全部' || e.source === source.value)
-  && (!kw.value || e.name.includes(kw.value))));
+  && (!searchKw.value || e.name.includes(searchKw.value))));
 const LPAGE = actionApi.isReal() ? 10 : 22;
 const lpage = ref(1);
-watch([source, kw], () => { lpage.value = 1; });
+watch([source, searchKw], () => { lpage.value = 1; });
 
 /* 真接口：列表分页 / 筛选走后台，目录只读轻头，选中类型才读详情；编辑须等完整基线，真模式空数据不借演示类型 */
 const real = actionApi.isReal();
 let mounted = true;
 onScopeDispose(() => { mounted = false; });
 const loadErr = ref('');
+const listLoading = ref(false);
+let listRequest: AbortController | undefined;
+let listSeq = 0;
 const realList = reactive<{ key: string; items: EventTypeRow[]; total: number; sources: string[] }>({ key: '', items: [], total: 0, sources: [] });
 const apiMsg = (e: unknown) => (isApiError(e) ? e.message : String(e));
 if (real) {
   watch(actionContextKey, () => { const key = actionContextKey(); loadErr.value = ''; loadSnapshot().catch((e) => { if (mounted && key === actionContextKey()) loadErr.value = apiMsg(e); }); }, { immediate: true });
-  let seq = 0;
-  watch([source, kw, lpage, actionContextKey], async () => {
-    const n = ++seq; const key = actionContextKey();
+  watch([source, searchKw, lpage, actionContextKey], async () => {
+    const n = ++listSeq; const key = actionContextKey();
+    listRequest?.abort(); listRequest = new AbortController();
+    listLoading.value = true;
     if (realList.key !== key) Object.assign(realList, { key, items: [], total: 0, sources: [] });
-    realList.items = [];
     try {
-      const r = await listEventTypes({ source: source.value, kw: kw.value, page: lpage.value, size: LPAGE });
-      if (mounted && n === seq && key === actionContextKey()) { Object.assign(realList, { items: r.items, total: r.total, sources: r.sources }); if (r.page && r.page !== lpage.value) lpage.value = r.page; }
-    } catch (e) { if (mounted && n === seq && key === actionContextKey()) message.error(`事件类型列表加载失败：${apiMsg(e)}`); }
-  }, { immediate: true, flush: 'sync' });
+      const r = await listEventTypes({ source: source.value, kw: searchKw.value, page: lpage.value, size: LPAGE }, listRequest.signal);
+      if (mounted && n === listSeq && key === actionContextKey()) { Object.assign(realList, { items: r.items, total: r.total, sources: r.sources }); if (r.page && r.page !== lpage.value) lpage.value = r.page; }
+    } catch (e) { if (mounted && n === listSeq && key === actionContextKey() && (e as Error)?.name !== 'AbortError') { Object.assign(realList, { items: [], total: 0 }); message.error(`事件类型列表加载失败：${apiMsg(e)}`); } }
+    finally { if (n === listSeq) listLoading.value = false; }
+  }, { immediate: true });
 }
+onScopeDispose(() => { ++listSeq; listRequest?.abort(); });
 /** 真实模式加载和错误均保持真实空态；演示数据仅用于显式 mock 模式。 */
 const live = computed(() => real);
 const ready = computed(() => !real || snapshotReady() && (!cur.value.id || eventDetailReady(cur.value.id, isDraft.value)));
@@ -118,6 +125,8 @@ const dedupValues = computed(() => ({ dedupKey: cur.value.dedupKey, dedupWindow:
   ...(isDraft.value ? draftFields(dedupCr.items.value, 'def') : {}) }));
 const dedupOpen = ref(false), dedupSaving = ref(false);
 const dedupForm = reactive({ dedupKey: '', dedupWindow: '' });
+const dedupKeyHelp = '同一事件类型中，去重键相同的事件在配置窗口内不重复向订阅方投递；历史可在“近期事件”的“已去重”筛选查看。';
+const dedupWindowHelp = '从最近一次未被去重的接收时间起计算，重复事件不延长窗口。支持正整数秒、分钟、小时、天或“永久”。';
 const dedupSnapshot = ref('');
 const dedupDirty = computed(() => dedupOpen.value && JSON.stringify(dedupForm) !== dedupSnapshot.value);
 const dedupGuard = useUnsavedGuard(dedupDirty);
@@ -167,7 +176,7 @@ async function onCreated(id: string) {
   try {
     invalidateActionSnapshot();
     await loadSnapshot();
-    const result = await listEventTypes({ source: source.value, kw: kw.value, page: lpage.value, size: LPAGE });
+    const result = await listEventTypes({ source: source.value, kw: searchKw.value, page: lpage.value, size: LPAGE });
     if (key !== actionContextKey()) return;
     Object.assign(realList, { items: result.items, total: result.total, sources: result.sources });
     await router.replace({ query: { ...route.query, event: id, view: undefined } });
@@ -200,14 +209,14 @@ interface FieldDef { k: string; label: string; kind?: 'input' | 'select' | 'swit
 const FIELD_TYPES = ['字符串', '整数', '金额', '日期', '日期时间', '枚举', '文本', '布尔', '对象', '数组'];
 const opt = (xs: string[]) => xs.map((x) => ({ value: x, label: x }));
 const FORMS: Record<SecName, { title: string; fields: () => FieldDef[]; blank: () => any }> = {
-  payload: { title: '载荷字段', blank: () => ({ name: '', api: '', type: '字符串', required: false, desc: '', sample: '' }), fields: () => [
+  payload: { title: '事件属性', blank: () => ({ name: '', api: '', type: '字符串', required: false, desc: '', sample: '' }), fields: () => [
     { k: 'name', label: '字段名', required: true }, { k: 'api', label: 'API 名', required: true },
     { k: 'type', label: '类型', kind: 'select', options: opt(FIELD_TYPES) }, { k: 'required', label: '必填', kind: 'switch' },
     { k: 'desc', label: '说明' }, { k: 'sample', label: '示例' }] },
   subs: { title: '订阅方', blank: () => ({ kind: '自动化', name: '', filter: '全部', then: '', status: '启用', weekly: 0 }), fields: () => [
     { k: 'kind', label: '类型', kind: 'select', options: opt(['规则', '自动化', '通知', '外部订阅']) },
     ...(editor.form.kind === '规则' ? [{ k: 'ruleId', label: '规则编号', required: true }] : []),
-    { k: 'name', label: '订阅方', required: true }, { k: 'filter', label: '过滤条件', required: true }, { k: 'then', label: '收到后', required: true },
+    { k: 'name', label: '订阅方', required: true }, { k: 'filter', label: '过滤条件' }, { k: 'then', label: '收到后', required: true },
     { k: 'status', label: '状态', kind: 'select', options: opt(['启用', '停用']) }] },
 };
 const createForms = FORMS;
@@ -228,7 +237,10 @@ function validSchema(node: any, depth = 0): boolean {
   if (node.type === '数组') return !!node.schema?.item && validSchema(node.schema.item, depth + 1);
   return true;
 }
+const editorValid = computed(() => editorDef.value.fields().every(f => !f.required || String(editor.form[f.k] ?? '').trim())
+  && (editor.sec !== 'payload' || validSchema(editor.form)));
 function saveEditor() {
+  if (editor.sec === 'subs') editor.form.filter = String(editor.form.filter ?? '').trim() || '全部';
   const miss = editorDef.value.fields().find((f) => f.required && !String(editor.form[f.k] ?? '').trim());
   if (miss) { message.warning(`请填写${miss.label}`); return; }
   if (editor.sec === 'subs' && editor.form.kind !== '规则') editor.form.ruleId = null;
@@ -367,24 +379,33 @@ const recentRows = computed(() => recentAll.value.filter((r) => (range.value ===
 const realRecent = reactive<{ key: string; items: EventRecord[]; total: number; err: string }>({ key: '', items: [], total: 0, err: '' });
 const recentKey = computed(() => JSON.stringify([actionContextKey(), cur.value.id, range.value, outcome.value, eq.page.value, eq.size.value]));
 let recentSeq = 0, recentScope = '';
+let recentRequest: AbortController | undefined;
+const recentLoading = ref(false);
 const recentScopeKey = () => JSON.stringify([actionContextKey(), cur.value.id, range.value, outcome.value, eq.size.value]);
 async function loadRecent(force = false) {
   const key = recentKey.value;
+  if (!mounted || !real || !ready.value || !cur.value.id || tab.value !== 'recent') {
+    if (recentLoading.value) { ++recentSeq; recentRequest?.abort(); realRecent.key = ''; recentLoading.value = false; }
+    return;
+  }
+  // A duplicate watcher notification must not invalidate the request already serving this key.
+  if (!force && realRecent.key === key) return;
   const k = ++recentSeq;
-  if (!mounted || !real || !ready.value || !cur.value.id || tab.value !== 'recent' || (!force && realRecent.key === key)) return;
+  recentRequest?.abort(); recentRequest = new AbortController(); recentLoading.value = true;
   const scope = recentScopeKey();
   if (scope !== recentScope) { recentScope = scope; Object.assign(realRecent, { items: [], total: 0 }); }
   Object.assign(realRecent, { key, err: '' });
   try {
-    const r = await listEvents(cur.value.id, { range: range.value as '24h' | '7d', outcome: outcome.value, page: eq.page.value, size: eq.size.value });
+    const r = await listEvents(cur.value.id, { range: range.value as '24h' | '7d', outcome: outcome.value, page: eq.page.value, size: eq.size.value }, recentRequest.signal);
     if (mounted && k === recentSeq && key === recentKey.value) { Object.assign(realRecent, { key, items: r.items, total: r.total, err: '' }); if (r.page && r.page !== eq.page.value) eq.page.value = r.page; }
   } catch (e) {
-    if (!mounted || k !== recentSeq || key !== recentKey.value) return;
+    if (!mounted || k !== recentSeq || key !== recentKey.value || (e as Error)?.name === 'AbortError') return;
     const err = apiMsg(e);
     Object.assign(realRecent, { key, items: [], total: 0, err });
-  }
+  } finally { if (k === recentSeq) recentLoading.value = false; }
 }
-if (real) watch([recentKey, () => tab.value, ready], () => loadRecent(), { immediate: true, flush: 'sync' });
+if (real) watch([recentKey, () => tab.value, ready], () => loadRecent(), { immediate: true });
+onScopeDispose(() => { ++recentSeq; recentRequest?.abort(); });
 const rtErr = computed(() => (rtOn.value ? rt.err : ''));
 const recentErr = computed(() => (live.value && realRecent.key === recentKey.value ? realRecent.err : ''));
 const recent = computed(() => live.value ? realRecent.key === recentKey.value ? { items: realRecent.items, total: realRecent.total } : { items: [], total: 0 } : paginate(recentRows.value, { page: eq.page.value, size: eq.size.value }));
@@ -426,8 +447,9 @@ const verCols = [
       <div class="et-filter">
         <a-input-search v-model:value="kw" placeholder="搜索名称" class="et-kw" />
         <a-select v-model:value="source" :options="sources.map((g) => ({ value: g, label: g === '全部' ? '全部来源' : g }))" class="et-sel" />
+        <a-spin v-if="listLoading" size="small" />
       </div>
-      <ul class="et-items">
+      <ul class="et-items" :aria-busy="listLoading" :class="{ 'et-items-loading': listLoading }">
         <a-tooltip v-for="e in list" :key="e.id" placement="right" :mouse-enter-delay="0.4" :title="`${e.api} · ${e.source} · ${e.object}`">
           <li :class="{ active: e.id === cur.id }" @click="pick(e.id)">
             <div class="et-row">
@@ -462,7 +484,7 @@ const verCols = [
       </div>
       <a-tabs v-model:activeKey="tab" class="et-tabs">
         <a-tab-pane key="overview" tab="概览" />
-        <a-tab-pane key="payload" tab="载荷字段" />
+        <a-tab-pane key="payload" tab="事件属性（载荷）" />
         <a-tab-pane key="subs" tab="订阅方" />
         <a-tab-pane key="recent" tab="近期事件" />
         <a-tab-pane v-if="real" key="exceptions" tab="投递异常" />
@@ -484,8 +506,8 @@ const verCols = [
             <a-descriptions-item label="负责人">{{ cur.owner }}</a-descriptions-item>
             <a-descriptions-item label="说明" :span="2"><span class="et-ell" :title="cur.desc">{{ cur.desc }}</span></a-descriptions-item>
             <a-descriptions-item label="载荷摘要" :span="2">{{ flat(fieldSec.rows.value).filter((f) => f._mark !== '删除').map((f) => f.name).join('、') }}<template v-if="!real || eventDetailReady(cur.id, true)">，另含 {{ envelope.length }} 个通用信封字段</template></a-descriptions-item>
-            <a-descriptions-item label="去重键"><span class="num">{{ dedupValues.dedupKey }}</span></a-descriptions-item>
-            <a-descriptions-item label="去重窗口">{{ dedupValues.dedupWindow }}</a-descriptions-item>
+            <a-descriptions-item><template #label>去重键<InfoTip :text="dedupKeyHelp" /></template><span class="num">{{ dedupValues.dedupKey }}</span></a-descriptions-item>
+            <a-descriptions-item><template #label>去重窗口<InfoTip :text="dedupWindowHelp" /></template>{{ dedupValues.dedupWindow }}</a-descriptions-item>
             <a-descriptions-item label="投递保证">{{ cur.delivery }}</a-descriptions-item>
             <a-descriptions-item label="顺序">{{ cur.ordering }}</a-descriptions-item>
             <a-descriptions-item label="保留期">{{ cur.retention }}</a-descriptions-item>
@@ -534,7 +556,7 @@ const verCols = [
       <!-- 载荷字段 -->
       <div v-else-if="tab === 'payload'" class="et-body">
         <div class="et-tool">
-          <span class="t-14 c-1">载荷字段 {{ fields.total }} 个</span><InfoTip text="事件自身字段在前，通用信封字段在后（所有事件类型共有，不可修改）" />
+          <span class="t-14 c-1">载荷字段 {{ fields.total }} 个</span><InfoTip text="事件属性对应载荷字段，可选择对象或数组定义嵌套结构，例如 config；通用信封字段由平台提供，不可修改" />
           <span class="et-sp" />
           <template v-if="isDraft">
             <span class="t-12" :class="dirty ? 'c-warning' : 'c-3'">{{ dirty ? '有未保存的修改' : real ? '已保存并生效' : de.locked.value ? '历史变更单已锁定' : '草稿已保存' }}</span>
@@ -601,7 +623,7 @@ const verCols = [
         </div>
         <div v-if="recentErr" class="et-err t-12"><span class="c-error et-err-m" :title="recentErr">近期事件加载失败：{{ recentErr }}</span><a-button size="small" @click="loadRecent(true)">重试</a-button></div>
         <div class="paged-scroll">
-          <a-table :columns="recentCols" :data-source="recent.items" :pagination="false" :scroll="{ x: 1050 }" table-layout="fixed" size="middle" row-key="id"
+          <a-table :columns="recentCols" :data-source="recent.items" :loading="recentLoading" :pagination="false" :scroll="{ x: 1050 }" table-layout="fixed" size="middle" row-key="id"
             :locale="{ emptyText: cur.status === '草稿' ? '草稿未发布，暂无事件' : '该时间范围内没有事件' }">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'id'"><a class="num et-event-id" :title="record.id" @click="drawer.open('event', record.id)">{{ record.id }}</a></template>
@@ -646,21 +668,21 @@ const verCols = [
     :closable="!dedupSaving" :mask-closable="false" :ok-button-props="{ disabled: !canEditDedup || !dedupDirty || !dedupForm.dedupWindow.trim() }"
     @ok="saveDedup" @cancel="dedupGuard(() => { dedupOpen = false; })">
     <a-form layout="vertical">
-      <a-form-item label="去重键" html-for="event-dedup-key"><a-input id="event-dedup-key" v-model:value="dedupForm.dedupKey" :disabled="dedupSaving" placeholder="留空时按事件 ID 去重" /></a-form-item>
-      <a-form-item label="去重窗口" html-for="event-dedup-window" required><a-input id="event-dedup-window" v-model:value="dedupForm.dedupWindow" :disabled="dedupSaving" placeholder="例如 24 小时" /></a-form-item>
+      <a-form-item html-for="event-dedup-key"><template #label>去重键<InfoTip :text="dedupKeyHelp" /></template><a-input id="event-dedup-key" v-model:value="dedupForm.dedupKey" :disabled="dedupSaving" placeholder="留空时按事件 ID 去重" /></a-form-item>
+      <a-form-item html-for="event-dedup-window" required><template #label>去重窗口<InfoTip :text="dedupWindowHelp" /></template><a-input id="event-dedup-window" v-model:value="dedupForm.dedupWindow" :disabled="dedupSaving" placeholder="例如 24 小时" /></a-form-item>
     </a-form>
   </a-modal>
-  <a-modal v-model:open="editor.open" :title="`${editor.key === null ? '新增' : '编辑'}${editorDef.title}`" ok-text="确定" cancel-text="取消" :width="520" @ok="saveEditor">
+  <a-modal v-model:open="editor.open" :title="`${editor.key === null ? '新增' : '编辑'}${editorDef.title}`" ok-text="确定" cancel-text="取消" :width="520" :ok-button-props="{ disabled: !canEdit || !editorValid }" @ok="saveEditor">
     <a-form layout="vertical" class="et-form">
       <a-form-item v-for="f in editorDef.fields()" :key="f.k" :label="f.label" :required="f.required">
         <a-select v-if="f.kind === 'select'" v-model:value="editor.form[f.k]" :options="f.options" />
         <a-switch v-else-if="f.kind === 'switch'" v-model:checked="editor.form[f.k]" />
-        <a-input v-else v-model:value="editor.form[f.k]" />
+        <a-input v-else v-model:value="editor.form[f.k]" :placeholder="editor.sec === 'subs' && f.k === 'filter' ? '留空匹配全部事件' : undefined" />
       </a-form-item>
-      <PayloadSchemaEditor v-if="editor.open && editor.sec === 'payload'" :node="editor.form" />
+      <PayloadSchemaEditor v-if="editor.open && editor.sec === 'payload'" :node="editor.form" :disabled="!canEdit" />
       <div v-if="editor.sec === 'payload' && ['对象', '数组'].includes(editor.form.type)" class="t-12 c-3">示例用于模拟触发，请填写与定义一致的 JSON 值。</div>
     </a-form>
-    <div class="t-12 c-3">{{ editor.sec === 'payload' ? '新增字段建议设为可选；删除或改类型属于不兼容变更，需要所有订阅方确认。' : '' }}点“保存”立即生效并生成新版本。</div>
+    <div class="t-12 c-3">点“保存”立即生效并生成新版本。</div>
   </a-modal>
   <a-modal v-model:open="simulationOpen" title="模拟触发" ok-text="触发测试" :confirm-loading="simulating" @ok="submitSimulation">
     <p class="t-12 c-3">填写测试载荷；必填项需填写，嵌套必填项由服务端校验。</p>
@@ -692,6 +714,7 @@ const verCols = [
 .et-kw { flex: 1; min-width: 0; }
 .et-sel { width: 108px; flex: none; }
 .et-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; overflow: auto; }
+.et-items-loading { opacity: .6; pointer-events: none; }
 .et-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
 .et-items li:hover { background: var(--g3); }
 .et-items li.active { background: var(--brand-bg); }

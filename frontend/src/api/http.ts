@@ -1,7 +1,7 @@
 /**
  * 统一接口调用（fetch）。所有真接口请求都从这里走：
  * - 地址：`/api/<前缀>/v1<path>`；开关键（谁负责）和前缀分开，见 config.ts，接口文件用 apiClient(开关键) 声明，前缀取 SWITCH_PREFIX；开关没切到真接口时请求直接拒绝（MOCK_ONLY）（开发时由 Vite 代理到后台骨架，见 vite.config.ts）；
- * - 身份：请求头 `X-Demo-As: <sys_user.code>`，由当前演示身份换算（?as=admin → U010001，?as=viewer → U010006，api-index §1.4）；
+ * - 身份：服务器签发的 HttpOnly 会话 Cookie；客户端身份字段只用于隔离缓存。
  * - 只读模式：页面处于历史版本（?ver=）或以此用户预览（?previewAs=）时，每个请求自动带同名 query 参数（api-index §1.7、§1.8）；
  * - 错误：后台统一错误体 `{code, message, details, requestId}` 转成 ApiError（api-index §1.2）。
  *
@@ -13,7 +13,7 @@ export const API_BASE = '/api';
 
 export interface ApiContext {
   ontologyId?: string | null;
-  /** sys_user.code，例如 U010001 */
+  /** 当前登录用户编号，仅用于缓存隔离，绝不作为身份请求头发送。 */
   demoAs?: string | null;
   /** 正在查看的历史版本（?ver=），null = 当前版本 */
   ver?: string | null;
@@ -24,6 +24,9 @@ export interface ApiContext {
 let ctxProvider: () => ApiContext = () => ({});
 export function setApiContext(fn: () => ApiContext) { ctxProvider = fn; }
 export const currentApiContext = (): ApiContext => ctxProvider();
+let unauthorizedHandler: (() => void) | undefined;
+export function setUnauthorizedHandler(handler: () => void) { unauthorizedHandler = handler; }
+export function handleUnauthorized(status: number) { if (status === 401) unauthorizedHandler?.(); }
 let workspaceEpoch = 0;
 const workspaceRequests = new Set<AbortController>();
 export function invalidateWorkspaceRequests() {
@@ -34,6 +37,7 @@ export function invalidateWorkspaceRequests() {
 /** Downloads use the same cancellation and stale-response boundary as JSON requests. */
 export async function workspaceFetch(url: string, init: RequestInit = {}, scoped = true): Promise<Response> {
   const headers = new Headers(init.headers);
+  headers.delete('X-Demo-As');
   const ontologyId = currentApiContext().ontologyId;
   if (scoped && headers.has('X-Ontology-Id') && headers.get('X-Ontology-Id') !== ontologyId) throw new DOMException('本体工作空间已切换', 'AbortError');
   if (scoped && ontologyId) headers.set('X-Ontology-Id', ontologyId);
@@ -43,10 +47,11 @@ export async function workspaceFetch(url: string, init: RequestInit = {}, scoped
   init.signal?.addEventListener('abort', abort, { once: true });
   if (scoped) workspaceRequests.add(controller);
   try {
-    const response = await fetch(url, { ...init, headers, signal: controller.signal });
+    const response = await fetch(url, { ...init, credentials: 'include', headers, signal: controller.signal });
     // Read the body before releasing cancellation; JSON/blob readers below consume the buffered response.
     const body = await response.arrayBuffer();
     if (scoped && epoch !== workspaceEpoch) throw new DOMException('本体工作空间已切换', 'AbortError');
+    if (!url.startsWith(`${API_BASE}/auth/`)) handleUnauthorized(response.status);
     return new Response(response.status === 204 || response.status === 205 || response.status === 304 ? null : body, { status: response.status, statusText: response.statusText, headers: response.headers });
   } finally {
     workspaceRequests.delete(controller);
@@ -107,7 +112,7 @@ function buildUrl(prefix: ApiPrefix, path: string, opts: Pick<RequestOptions, 'q
   return `${API_BASE}/${prefix}/v1${path.startsWith('/') ? path : `/${path}`}${s ? `?${s}` : ''}`;
 }
 
-async function parseError(res: Response): Promise<ApiError> {
+export async function parseError(res: Response): Promise<ApiError> {
   let body: Partial<ApiErrorBody> | null = null;
   try { body = (await res.json()) as Partial<ApiErrorBody>; } catch { /* 非 JSON（例如代理连不上后台时的 502/504） */ }
   if (body && typeof body.code === 'string') {
@@ -119,7 +124,6 @@ async function parseError(res: Response): Promise<ApiError> {
 async function request<T>(prefix: ApiPrefix, path: string, opts: RequestOptions = {}, blob = false): Promise<T> {
   const ctx = currentApiContext();
   const headers: Record<string, string> = { Accept: 'application/json', ...(opts.headers ?? {}) };
-  if (ctx.demoAs && !Object.keys(headers).some((name) => name.toLowerCase() === 'x-demo-as')) headers['X-Demo-As'] = ctx.demoAs;
   if (opts.ontologyScope !== false && ctx.ontologyId && !Object.keys(headers).some((name) => name.toLowerCase() === 'x-ontology-id')) headers['X-Ontology-Id'] = ctx.ontologyId;
   let body: BodyInit | undefined;
   if (opts.body !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(opts.body); }

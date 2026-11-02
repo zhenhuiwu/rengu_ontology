@@ -8,8 +8,10 @@ import { message } from 'ant-design-vue';
 import dayjs, { type Dayjs } from 'dayjs';
 import AppPagination from '@/components/AppPagination.vue';
 import { useCursorQuery } from '@/composables/usePagedQuery';
+import { useDebouncedRef } from '@/composables/useDebouncedRef';
 import { adminApiOn, downloadAuditExport, exportAuditLogs, fetchAuditActions, mockAuditActions, queryAuditLogs, queryAuditLogsMock, type AuditQuery } from '@/api/admin';
 import { currentApiContext, isApiError } from '@/api/http';
+import { fitColumns } from '@/tableColumns';
 import { useReadonly } from '@/composables/useReadonly';
 
 const { readonly, reason } = useReadonly();
@@ -30,18 +32,22 @@ const action = ref('全部');
 const result = ref('全部');
 const field = ref<'actor' | 'target'>('actor');
 const kw = ref('');
-const cq = useCursorQuery({ size: 10, filters: [range, action, result, field, kw] });
+const searchKw = useDebouncedRef(kw);
+const cq = useCursorQuery({ size: 10, filters: [range, action, result, field, searchKw] });
 // 取数在 src/api/admin.ts：mock 模式同步算（和原来一样），real 模式走 /api/admin/v1/audit-logs
-const query = computed<AuditQuery>(() => {
+const filters = computed(() => {
   const [from, to] = range.value.map((d) => d.format('YYYY-MM-DD HH:mm:ss'));
-  return { from, to, action: action.value, result: result.value, field: field.value, kw: kw.value, cursor: cq.cursor.value, size: cq.size };
+  return { from, to, action: action.value, result: result.value, field: field.value, kw: searchKw.value };
 });
+const query = computed<AuditQuery>(() => ({ ...filters.value, cursor: cq.cursor.value, size: cq.size }));
 const empty = () => ({ items: [], nextCursor: null, hasMore: false });
 const res = ref(adminApiOn() ? empty() : queryAuditLogsMock(query.value));
 const loadError = ref(''), loading = ref(false), loadedContext = ref('');
 let seq = 0;
-watch([query, () => JSON.stringify(currentApiContext())], async ([q, context]) => {
+watch([query, () => JSON.stringify(currentApiContext()), filters], async ([q, context, currentFilters], previous) => {
   const n = ++seq;
+  // Cursor reset navigates asynchronously; wait for its first page before querying new filters.
+  if (q.cursor && previous?.length && context === previous[1] && currentFilters !== previous[2]) return;
   if (adminApiOn() && loadedContext.value !== context) { res.value = empty(); loadedContext.value = context; }
   loading.value = true;
   loadError.value = '';
@@ -71,7 +77,7 @@ async function onExport() {
     }
   };
   try {
-    const job = await exportAuditLogs(query.value);
+    const job = await exportAuditLogs({ ...query.value, kw: kw.value });
     checkContext();
     if (!job) { message.info('演示模式不生成审计导出文件'); return; }
     const blob = await downloadAuditExport(job, checkContext);
@@ -89,14 +95,14 @@ async function onExport() {
     exporting.value = false;
   }
 }
-const columns = [
+const columns = fitColumns([
   { title: '时间', dataIndex: 'time', key: 'time', width: 176 },
   { title: '操作人', dataIndex: 'actor', key: 'actor', width: 180 },
   { title: '动作', dataIndex: 'action', key: 'action', width: 140 },
-  { title: '对象', dataIndex: 'target', key: 'target', ellipsis: true },
+  { title: '对象', dataIndex: 'target', key: 'target', width: 200, ellipsis: true },
   { title: '来源 IP', dataIndex: 'ip', key: 'ip', width: 140 },
   { title: '结果', key: 'result', width: 88 },
-];
+]);
 </script>
 
 <template>
@@ -122,7 +128,7 @@ const columns = [
     </div>
     <a-alert v-if="loadError" type="error" show-icon :message="loadError" />
     <div class="al-table paged-scroll">
-      <a-table size="small" row-key="id" :columns="columns" :loading="loading" :data-source="res.items" :pagination="false">
+      <a-table size="small" row-key="id" :columns="columns" :loading="loading" :data-source="res.items" :pagination="false" :scroll="{ x: 924 }">
         <template #bodyCell="{ column, record }">
           <span v-if="column.key === 'result'" :class="record.result === '成功' ? 'c-2' : 'c-error'">{{ record.result }}</span>
           <span v-else-if="column.key === 'time' || column.key === 'ip'" class="num">{{ record[column.dataIndex as 'time'] }}</span>
@@ -136,8 +142,11 @@ const columns = [
 </template>
 
 <style scoped>
-.al { flex: 1; min-height: 0; }
+.al { flex: 1; min-height: 0; min-width: 0; }
+.al .panel-head { height: auto; min-height: 44px; flex-wrap: wrap; row-gap: 8px; min-width: 0; }
+.al :deep(.ant-space) { flex-wrap: wrap; max-width: 100%; }
 .al-table { flex: 1; min-height: 0; padding: 0 16px; }
+.al-table :deep(.ant-table-content > table) { min-width: 924px !important; }
 .al-pager { padding: 4px 16px 8px; }
 .al-w120 { width: 120px; }
 .al-w96 { width: 96px; }

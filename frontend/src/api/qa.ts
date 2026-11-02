@@ -4,7 +4,7 @@
  */
 import type { QaSession, QaFavorite, QaPage, QaDemoTurn } from '@/mock/qa';
 import type { CertQa, FreqQ, SemPlan, EvalRun, EvalQ, FailCase, FailKind, Feedback } from '@/mock/qa-tuning';
-import { apiClient, workspaceFetch, currentApiContext, ApiError, API_BASE, type ApiErrorBody, type PageResult, type RequestOptions } from './http';
+import { apiClient, workspaceFetch, currentApiContext, ApiError, API_BASE, handleUnauthorized, type ApiErrorBody, type PageResult, type RequestOptions } from './http';
 
 const api = apiClient('qa');
 /** Freeze identity/history/preview for a multi-await UI operation. */
@@ -26,7 +26,6 @@ async function download(path: string, query?: Record<string, string>): Promise<R
   if (ctx.ver) qs.set('ver', ctx.ver);
   if (ctx.previewAs) qs.set('previewAs', ctx.previewAs);
   const headers: Record<string, string> = {};
-  if (ctx.demoAs) headers['X-Demo-As'] = ctx.demoAs;
   if (ctx.ontologyId) headers['X-Ontology-Id'] = ctx.ontologyId;
   const url = `${API_BASE}/${api.prefix}/v1${path}${qs.size ? `?${qs}` : ''}`;
   let res: Response;
@@ -64,11 +63,12 @@ export interface QaAlertRef { id: string; rule: string; level: string; objKind: 
 /**
  * 动作意图（后台 intent.action_snapshot）：只建议 + dry-run 结果。
  * policy = 动作已发布执行策略；canStage=false（suggest / 不允许 AI 发起）只显示建议、不给发起按钮。
- * 发起走 stageTurnAction（问数侧 W7a，只暂存待人工确认，auto 也不自动执行）→ 动作中心 confirm。
+ * 发起走 stageTurnAction（问数侧 W7a，只暂存待人工确认）→ 当前对话确认 → confirm 按已发布策略提交执行。
  */
 export interface QaActionSuggest {
   type: string; name: string; reason: string; params: Record<string, unknown>; mode: 'suggest';
   runId?: string; stageVersion?: number;
+  decision?: { alertId?: string | null };
   policy?: 'suggest' | 'confirm' | 'auto'; canStage?: boolean;
   dryRun: import('@/pages/ops/actionReview').ActionReview & { passed: boolean; checked: number; failed: { name?: string; msg?: string }[] };
   stage: { typeId: string; objKind: string | null; objId: string; objLabel: string; params: string | null };
@@ -126,12 +126,12 @@ export async function askTurnStream(sid: string, question: string, onEvent: (e: 
   if (ctx.ver) qs.set('ver', ctx.ver);
   if (ctx.previewAs) qs.set('previewAs', ctx.previewAs);
   const headers: Record<string, string> = { Accept: 'text/event-stream', 'Content-Type': 'application/json' };
-  if (ctx.demoAs) headers['X-Demo-As'] = ctx.demoAs;
   if (ctx.ontologyId) headers['X-Ontology-Id'] = ctx.ontologyId;
   const url = `${API_BASE}/${api.prefix}/v1/sessions/${encodeURIComponent(sid)}/turns:stream${qs.size ? `?${qs}` : ''}`;
   let res: Response;
-  try { res = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ question, refs: [] }), signal }); }
+  try { res = await fetch(url, { method: 'POST', credentials: 'include', headers, body: JSON.stringify({ question, refs: [] }), signal }); }
   catch (e) { if ((e as Error)?.name === 'AbortError') throw e; throw new QaStreamUnsupported(String(e)); }
+  handleUnauthorized(res.status);
   if (res.status === 404 && !(res.headers.get('content-type') ?? '').includes('json')) throw new QaStreamUnsupported('no endpoint');
   if (!res.ok) {
     let b: Partial<ApiErrorBody> | null = null;
@@ -196,21 +196,21 @@ export async function exportTurn(tid: string, format: 'xlsx' | 'csv' = 'xlsx'): 
 }
 
 /**
- * X1 / X2 / X2b 动作（动态模块 /api/ontology/v1/action-runs，开关 `dynamic`）：问数只发起和引用。
+ * X1 / X2 / X2b 动作（动态模块 /api/ontology/v1/action-runs，开关 `dynamic`）：问数内确认后按策略提交执行。
  * 工作台「建议动作」/ 右栏「发起」：stage 得到待确认的 action_run → 确认卡 → confirm；确认卡取消 → withdraw。
  */
 const dyn = apiClient('dynamic');
 export const actionsReal = () => dyn.isReal();
-export type QaActionRun = import('@/pages/ops/actionReview').ActionReview & { id: string; action: string; typeVersion: string | null; objLabel: string | null; approver: string | null; system: string | null; status: string; idemKey: string; params: string | null; extRef?: string | null; reconcile?: string | null; failReason?: string | null; unknownReason?: string | null; can?: { confirm?: boolean; reasons?: Record<string, string> } };
+export type QaActionRun = import('@/pages/ops/actionReview').ActionReview & { id: string; typeId: string; action: string; typeVersion: string | null; objKind: string | null; objId: string | null; objLabel: string | null; alertId?: string | null; approver: string | null; system: string | null; status: string; idemKey: string; params: string | null; paramsUnavailable?: string | null; extRef?: string | null; reconcile?: string | null; failReason?: string | null; unknownReason?: string | null; can?: { confirm?: boolean; reasons?: Record<string, string> } };
 export interface QaStageIn { action?: string; typeId?: string; source: { type: '问数'; session?: string; sessionTitle?: string }; objKind?: string | null; objId: string; objLabel: string; params?: string | null }
-export const stageAction = (body: QaStageIn) => dyn.post<QaActionRun>('/action-runs:stage', body);
-/** W7a：这一轮的建议动作 → 动作中心待确认（来源 问数，确认人 = 自己；不自动执行） */
-export const stageTurnAction = (tid: string, body: { objId?: string; objLabel?: string; params?: string | null } = {}) =>
-  api.post<QaActionRun>(`/turns/${encodeURIComponent(tid)}/action:stage`, body);
+export const stageAction = (body: QaStageIn, options: Omit<RequestOptions, 'method' | 'body'> = {}) => dyn.post<QaActionRun>('/action-runs:stage', body, options);
+/** W7a：这一轮的建议动作 → 待确认记录（来源 问数，确认人 = 自己；不自动执行） */
+export const stageTurnAction = (tid: string, body: { objId?: string; objLabel?: string; params?: string | null } = {}, options: Omit<RequestOptions, 'method' | 'body'> = {}) =>
+  api.post<QaActionRun>(`/turns/${encodeURIComponent(tid)}/action:stage`, body, options);
 /** 刷新带 ?confirm=1&run= 的页面时取回已暂存的动作，不再重复暂存 */
-export const getAction = (code: string) => dyn.get<QaActionRun & { can?: { confirm?: boolean } }>(`/action-runs/${encodeURIComponent(code)}`);
-export const confirmAction = (code: string) => dyn.post<QaActionRun>(`/action-runs/${encodeURIComponent(code)}:confirm`, {});
-export const withdrawAction = (code: string, reason = '确认卡取消') => dyn.post<QaActionRun>(`/action-runs/${encodeURIComponent(code)}:withdraw`, { reason });
+export const getAction = (code: string, options: Omit<RequestOptions, 'method' | 'body'> = {}) => dyn.get<QaActionRun>(`/action-runs/${encodeURIComponent(code)}`, options);
+export const confirmAction = (code: string, options: Omit<RequestOptions, 'method' | 'body'> = {}) => dyn.post<QaActionRun>(`/action-runs/${encodeURIComponent(code)}:confirm`, {}, options);
+export const withdrawAction = (code: string, reason = '确认卡取消', options: Omit<RequestOptions, 'method' | 'body'> = {}) => dyn.post<QaActionRun>(`/action-runs/${encodeURIComponent(code)}:withdraw`, { reason }, options);
 
 /* ───────── R5 问数调优 · 认证问答 / 高频问题（qa-api §7 T1 T3–T8 T18 T19） ───────── */
 export interface QaTuningSummary { version: string; dataAsOf: string; recertCount: number; openFeedback: number; uncertFreq: number; evalTotal: number }

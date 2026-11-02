@@ -13,6 +13,7 @@ import { validateActionLaunch } from '@/api/dynamic';
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
+import { fitColumns } from '@/tableColumns';
 import ObjRef from '@/components/ObjRef.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
@@ -31,7 +32,7 @@ import {
 
 type LogItem = { time: string; text: string; who: string; abnormal?: boolean };
 /** dims：通用维度值（演示数据里是所属门店）；objKindLabel：对象类型显示名（真接口由后台给，mock 取对象类型目录） */
-type Row = Alert & { log: LogItem[]; actionRef?: string; actionStatus?: string; actionId?: string | null; dims: AlertDim[]; objKindLabel?: string; assigneeId?: string | null; canClose?: boolean; canClaim?: boolean; assignedToMe?: boolean; can?: AlertCan };
+type Row = Alert & { log: LogItem[]; actionRef?: string; actionStatus?: string; actionId?: string | null; actionOutcome?: string | null; actionReason?: string | null; actionExtRef?: string | null; dims: AlertDim[]; objKindLabel?: string; assigneeId?: string | null; canClose?: boolean; canClaim?: boolean; assignedToMe?: boolean; can?: AlertCan };
 const REAL_API = dynamicApi.isReal();
 /** 页面内的告警状态（模拟后台：认领、转派、关闭、发起动作都会改它并写处理记录） */
 /** 关联动作取自动作中心同一份数据（mock/actions.ts，按来源告警匹配最近一条），两页的幂等键和状态一致 */
@@ -48,7 +49,7 @@ const IN_FLIGHT = ['待确认', '审批中', '执行中', '结果未知'];
 const live = computed(() => REAL_API);
 const readFail = (e: unknown) => fail(e);
 const app = useAppStore();
-/** 当前处理人：mock 固定王敏；真接口时后台按 X-Demo-As 认人，前端取当前演示身份的姓名做同样的判断 */
+/** 当前处理人：mock 固定王敏；真实接口由会话 Cookie 鉴权；前端仅显示当前登录用户，操作权限以服务端结果为准 */
 const ME = computed(() => REAL_API ? app.user.name : '王敏');
 let tick = 0;
 const now = () => { tick += 1; return `2026-10-25 16:${String(30 + tick).padStart(2, '0')}:00`; };
@@ -212,16 +213,16 @@ const statusBadge = (s: AlertStatus) =>
 /** 级别是提醒程度，不是失败：高 = 加粗深灰，其余灰 */
 const levelClass = (l: Alert['level']) => (l === '高' ? 'c-1 fw-600' : 'c-2');
 
-const columns = [
+const columns = fitColumns([
   { title: '级别', key: 'level', width: 64 },
   { title: '告警编号', dataIndex: 'id', key: 'id', width: 176 },
   { title: '规则', key: 'rule', width: 172 },
-  { title: '对象', key: 'obj', ellipsis: true },
+  { title: '对象', key: 'obj', width: 180, ellipsis: true },
   { title: '触发值 / 阈值', key: 'value', width: 200 },
   { title: '触发时间', dataIndex: 'triggeredAt', key: 'triggeredAt', width: 172 },
   { title: '状态', key: 'status', width: 92 },
   { title: '处理人', key: 'assignee', width: 88 },
-];
+]);
 
 function claimRow(a: Row, who = ME.value) {
   if (a.status !== '待处理') return;
@@ -485,7 +486,7 @@ watch([dynamicContextKey, selectedId], async () => {
           <a-descriptions-item v-if="rule?.dedupe" label="去重">{{ rule.dedupe }}</a-descriptions-item>
           <a-descriptions-item label="数据截至"><span class="num">{{ current.cutoff }}</span></a-descriptions-item>
           <a-descriptions-item label="处理人">{{ current.assignee ?? '未认领' }}</a-descriptions-item>
-          <a-descriptions-item v-if="current.actionRef" label="关联动作"><router-link v-if="current.actionId" :to="{ path: '/use/ops/actions', query: { ontology: app.ontologyId, act: current.actionId, tab: current.actionStatus === '结果未知' ? 'unknown' : 'records' } }" class="num">{{ current.actionId }}</router-link><span v-else class="num">{{ current.actionRef }}</span><span class="c-3"> · {{ current.actionStatus }}</span></a-descriptions-item>
+          <a-descriptions-item v-if="current.actionRef" label="关联动作"><router-link v-if="current.actionId" :to="{ path: '/use/ops/actions', query: { ontology: app.ontologyId, act: current.actionId, tab: current.actionStatus === '结果未知' ? 'unknown' : 'records' } }" class="num">{{ current.actionId }}</router-link><span v-else class="num">{{ current.actionRef }}</span><span class="c-3"> · {{ current.actionStatus }}<template v-if="current.actionOutcome"> · {{ current.actionOutcome }}</template></span><div v-if="current.actionReason" class="t-12 c-error">{{ current.actionReason }}</div><div v-if="current.actionExtRef" class="t-12 num">外部回执 {{ current.actionExtRef }}</div></a-descriptions-item>
         </a-descriptions>
 
         <template v-if="live">
@@ -493,7 +494,7 @@ watch([dynamicContextKey, selectedId], async () => {
             <span>AI 处置建议</span>
             <a-button size="small" :loading="decisionLoading" @click="loadDecision(true)">{{ decision ? '重新生成' : '生成建议' }}</a-button>
           </div>
-          <div v-if="!decision" class="t-14 c-3">{{ decisionLoading ? '加载中…' : '暂无建议。规则告警由调度 worker 自动评估，也可手动生成。' }}</div>
+          <div v-if="!decision" class="t-14 c-3">{{ decisionLoading ? '加载中…' : '暂无建议，可点击“生成建议”获取处置建议。' }}</div>
           <template v-else>
             <div class="t-12 c-3">{{ decisionBy(decision) }} · <span class="num">{{ decision.createdAt.slice(0, 19).replace('T', ' ') }}</span> · 只给建议，执行需人工确认</div>
             <div v-if="decision.error" class="t-14 c-3">评估失败：{{ decision.error }}</div>
@@ -544,7 +545,7 @@ watch([dynamicContextKey, selectedId], async () => {
             </template>
             <a-tooltip :title="locked ? `关联动作${current.actionStatus}，有结果前不能关闭` : undefined"><a-button :disabled="live ? !current.can?.close : locked">关闭</a-button></a-tooltip>
           </a-popover>
-          <span v-if="current.actionRef" class="t-14 c-3">{{ rule?.action }} · {{ current.actionStatus }}</span>
+          <span v-if="current.actionRef" class="t-14 c-3">{{ rule?.action }} · {{ current.actionStatus }}<template v-if="current.actionOutcome"> · {{ current.actionOutcome }}</template></span>
           <a-tooltip v-else-if="rule?.action" :title="current.can?.reasons.startAction"><a-button type="primary" :disabled="live && !current.can?.startAction" @click="live ? actionOpen = true : runAction()">{{ rule.action }}</a-button></a-tooltip>
           </template>
         </template>
@@ -569,7 +570,7 @@ watch([dynamicContextKey, selectedId], async () => {
 .al-table :deep(.ant-table-row) { cursor: pointer; }
 .al-table :deep(.al-row-active > td) { background: var(--brand-bg) !important; }
 .al-detail { width: 480px; flex: none; }
-.al-body { flex: 1; min-height: 0; padding: 12px 16px; }
+.al-body { flex: 1; min-height: 0; overflow: auto; overflow-wrap: anywhere; padding: 12px 16px; }
 .al-sub { margin: 16px 0 12px; }
 .al-tl :deep(.ant-timeline-item) { padding-bottom: 12px; }
 .al-out { margin-bottom: 8px; }
