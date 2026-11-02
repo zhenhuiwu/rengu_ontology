@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>办公设备 · 问数组件演示</title>
+  <style>
+    * { box-sizing: border-box; } body { margin: 0; color: #262626; background: #f5f5f5; font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    header { height: 64px; padding: 0 32px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e5e6e8; background: #fff; } header strong { font-size: 18px; font-weight: 600; } header span { color: #8c8c8c; font-size: 12px; }
+    main { max-width: 1440px; margin: 40px auto; padding: 0 32px; } h1 { font-size: 24px; font-weight: 600; margin: 0 0 8px; } p { color: #595959; margin: 0 0 28px; }
+    section { border: 1px solid #e5e6e8; border-radius: 6px; background: #fff; overflow-x: auto; } .section-title { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid #e5e6e8; font-weight: 600; } .section-title span { font-weight: 400; font-size: 12px; color: #8c8c8c; }
+    table { width: 100%; min-width: 560px; border-collapse: collapse; text-align: left; } th { background: #fafafa; color: #595959; font-weight: 500; } th, td { padding: 16px 24px; border-bottom: 1px solid #f0f0f0; } tr:last-child td { border-bottom: 0; } code { font: 13px/1.6 Consolas, monospace; color: #595959; }
+    .note { color: #8c8c8c; font-size: 12px; margin-top: 20px; } #demo-error { color: #cf1322; margin-top: 20px; }
+    @media (max-width: 640px) { header { padding: 0 20px; } main { margin: 24px auto; padding: 0 20px; } }
+  </style>
+</head>
+<body>
+  <header><strong>办公设备工作台</strong><span>组件集成演示</span></header>
+  <main>
+    <h1>设备列表</h1>
+    <p>从右下角打开智能问数，继续在当前页面查看设备。</p>
+    <section aria-label="示例设备">
+      <div class="section-title">办公设备<span>静态演示数据</span></div>
+      <table><thead><tr><th>设备编号</th><th>设备名称</th><th>设备类型</th><th>状态</th></tr></thead><tbody>
+        <tr><td><code>16001</code></td><td>办公打印机 01</td><td>打印机</td><td>正常</td></tr>
+        <tr><td><code>16002</code></td><td>办公投影仪 01</td><td>投影仪</td><td>待检</td></tr>
+        <tr><td><code>16003</code></td><td>办公打印机 02</td><td>打印机</td><td>正常</td></tr>
+      </tbody></table>
+    </section>
+    <p class="note">本页仅为独立宿主演示，不会更改原系统界面或设备数据。</p>
+    <p id="demo-error" role="alert" hidden></p>
+  </main>
+  <script src="./agent-widget.js"></script>
+  <script>
+    try {
+      var params = new URLSearchParams(window.location.search);
+      window.demoAgent = window.RenguAgent.mount({
+        baseUrl: params.get('baseUrl') || new URL('./', window.location.href).href,
+        ontologyId: params.get('ontology') || '4',
+        theme: params.get('theme') || 'light',
+        title: '智能问数'
+      });
+    } catch (error) {
+      var target = document.getElementById('demo-error');
+      target.hidden = false;
+      target.textContent = error instanceof Error ? error.message : '组件配置无效';
+    }
+  </script>
+</body>
+</html>
