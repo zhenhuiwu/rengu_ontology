@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "rengu-ontology": {
+      "type": "http",
+      "url": "http://127.0.0.1:8000/api/qa/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer rg_live_REPLACE_WITH_YOUR_KEY",
+        "X-Ontology-Id": "6"
+      }
+    }
+  }
+}

@@ -2,6 +2,8 @@
 
 技术栈：Python 3.12、uv、FastAPI、Pydantic v2、SQLAlchemy 2（async，asyncpg 驱动）、Alembic、PostgreSQL 17 + pgvector、ruff、pytest、docker compose。
 
+> AI/外部软件集成（数据接入、机器 API、动作/事件、MCP）：见 [docs/AI-INTEGRATION.md](../docs/AI-INTEGRATION.md)。
+
 **开发约定见 [`docs/backend/CONVENTIONS.md`](docs/backend/CONVENTIONS.md)**。合并时这份文档移到仓库顶层的 `docs/backend/`。
 
 ## 运行
