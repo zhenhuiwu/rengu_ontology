@@ -460,23 +460,23 @@ const deletion = useDefinitionDelete('event', {
     <span v-if="loadErr" class="c-3">事件类型加载失败：{{ loadErr }}</span><a-spin v-else />
   </div>
   <div v-else class="et">
-    <div class="panel et-list">
+    <div class="panel et-list side-list">
       <div class="et-filter">
         <a-input-search v-model:value="kw" placeholder="搜索名称" class="et-kw" />
         <a-select v-model:value="source" :options="sources.map((g) => ({ value: g, label: g === '全部' ? '全部来源' : g }))" class="et-sel" />
         <a-spin v-if="listLoading" size="small" />
       </div>
-      <ul class="et-items" :aria-busy="listLoading" :class="{ 'et-items-loading': listLoading }">
+      <ul class="et-items side-list-items" :aria-busy="listLoading" :class="{ 'et-items-loading': listLoading }">
         <a-tooltip v-for="e in list" :key="e.id" placement="right" :mouse-enter-delay="0.4" :title="`${e.api} · ${e.source} · ${e.object}`">
-          <li :class="{ active: e.id === cur.id }" @click="pick(e.id)">
-            <div class="et-row">
-              <span class="t-14 et-name">{{ e.name }}</span>
-              <span class="t-12 num" :class="e.status === '变更中' ? 'c-warning' : 'c-3'">{{ e.status === '已发布' ? '' : e.status + ' · ' }}{{ e.version }}</span>
+          <li class="side-list-item" :class="{ active: e.id === cur.id }" @click="pick(e.id)">
+            <div class="et-row side-list-row">
+              <span class="t-14 et-name side-list-name">{{ e.name }}</span>
+              <span class="t-12 num side-list-meta" :class="e.status === '变更中' ? 'c-warning' : 'c-3'">{{ e.status === '已发布' ? '' : e.status + ' · ' }}{{ e.version }}</span>
             </div>
           </li>
         </a-tooltip>
       </ul>
-      <div class="et-foot">
+      <div class="et-foot side-list-foot">
         <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" unit="个事件" class="et-pager" empty-text="没有匹配的事件类型" />
       </div>
     </div>
@@ -725,22 +725,17 @@ const deletion = useDefinitionDelete('event', {
 <style scoped>
 .et-event-id { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .et { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.et-list { width: 300px; flex: none; }
+.et-list { flex: none; }
 .et-wait { display: flex; align-items: center; justify-content: center; min-height: 240px; }
 .et-filter { padding: 12px 12px 8px; display: flex; gap: 8px; flex: none; }
 .et-kw { flex: 1; min-width: 0; }
 .et-sel { width: 108px; flex: none; }
-.et-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; overflow: auto; }
+.et-items { flex: 1; min-height: 0; }
 .et-items-loading { opacity: .6; pointer-events: none; }
-.et-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
-.et-items li:hover { background: var(--g3); }
-.et-items li.active { background: var(--brand-bg); }
-.et-items li.active .et-name { color: var(--brand); }
 .et-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .et-sub-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .et-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .et-pager { flex: 1; min-height: 0; }
-.et-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; }
 .et-detail { flex: 1; min-width: 0; }
 .et-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
 .et-head :deep(.ant-tag) { margin-inline-end: 0; }

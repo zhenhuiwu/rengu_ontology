@@ -220,7 +220,7 @@ class RowScopeIn(ApiModel):
     obj_type: str = Field(min_length=1, max_length=64)
     # 可选：当前本体里对象类型编号（优先于 objType 显示名定位）
     object_type_code: str | None = Field(default=None, max_length=64)
-    prop: str = Field(min_length=1, max_length=64)
+    prop: str = Field(min_length=1, max_length=384)
     op: ScopeOp | None = None
     values: list[str] = Field(min_length=1, max_length=200)
 

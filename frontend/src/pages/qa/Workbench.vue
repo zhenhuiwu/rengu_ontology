@@ -97,6 +97,16 @@ async function refreshAction(turnId: string, quiet = false) {
     if (context === actionContext && actionRuns.value[turnId] === current) rememberAction(turnId, run);
   } catch (e) { if (!quiet && context === actionContext) message.error(`读取动作状态失败：${errText(e)}`); }
 }
+async function queryActionResult(turnId: string) {
+  const run = actionRuns.value[turnId], context = actionContext;
+  if (!run || run.status !== '结果未知' || readonly.value || actionBusy.value || actionIssues.value[turnId]) return;
+  actionBusy.value = true;
+  try {
+    const updated = await qaApi.queryActionResult(run.id, qaApi.qaRequestOptions());
+    if (context === actionContext && actionRuns.value[turnId] === run) rememberAction(turnId, updated);
+  } catch (e) { if (context === actionContext) message.error(`查询幂等回执失败：${errText(e)}`); }
+  finally { actionBusy.value = false; }
+}
 let actionTimer: ReturnType<typeof setInterval> | undefined;
 watch(() => Object.values(actionRuns.value).some((run) => run.status === '执行中'), (running) => {
   if (actionTimer) clearInterval(actionTimer);
@@ -267,6 +277,21 @@ async function runAction(reuseId?: string, suggest?: qaApi.QaActionSuggest, turn
         if (context !== `${metaContextKey()}|${sess.activeId.value}`) return;
         rememberAction(turnId, r);
         if (turnId && actionIssues.value[turnId]) { message.warning(actionIssues.value[turnId]); return; }
+        if (r.status === '结果未知' && turnId) {
+          const tid = turnId;
+          // The backend dispatches immediately after commit; poll briefly so
+          // the card reaches 已对账 without waiting for a manual refresh.
+          let attempts = 0;
+          const timer = window.setInterval(() => {
+            attempts += 1;
+            if (context !== `${metaContextKey()}|${sess.activeId.value}`
+              || attempts > 10 || actionRuns.value[tid]?.status !== '结果未知') {
+              window.clearInterval(timer);
+              return;
+            }
+            void refreshAction(tid, true);
+          }, 1000);
+        }
         submitted.value = true; submittedRun.value = { id: r.id, approver: r.approver };
         if (r.status === '成功') message.success('动作执行成功');
         else if (r.status === '失败' || r.status === '结果未知') message.warning(`动作${r.status}，请查看当前对话中的状态`);
@@ -295,7 +320,7 @@ onMounted(() => {
     <QaSessionPanel @panel="(v) => (panel = v)" />
     <section class="panel qa-center">
       <div v-if="pv.active.value" class="qa-pv t-12 c-2">{{ pv.userName.value }} 的数据范围：{{ pvText }}。回答只含范围内的数据，预览中不能追问和发起动作。</div>
-      <QaConversation :applied="applied" :tips="tips" :action-runs="actionRuns" :action-issues="actionIssues" :action-busy="actionBusy" @refresh-action="(tid: string) => refreshAction(tid)" @suggest="(a?: qaApi.QaActionSuggest, tid?: string) => runAction(undefined, a, tid)" @apply="openApply" />
+      <QaConversation :applied="applied" :tips="tips" :action-runs="actionRuns" :action-issues="actionIssues" :action-busy="actionBusy" @refresh-action="(tid: string) => refreshAction(tid)" @query-action="queryActionResult" @suggest="(a?: qaApi.QaActionSuggest, tid?: string) => runAction(undefined, a, tid)" @apply="openApply" />
       <QaComposer v-model:scope="scope" v-model:caliber="caliber" />
     </section>
     <QaObjectPanel v-if="!sess.real" :pending="pending" :submitted="submitted" :run="submittedRun" :highlight="highlight" @run="runAction()" @detail="drawer.open('region', REGION_EC.id)" />

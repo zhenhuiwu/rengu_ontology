@@ -366,7 +366,7 @@ def convert(source, target, sanitizer, *, verify=False):
                 revisions.add(value)
             if (table, column) in CLEAR_NULL:
                 cleaned = None
-            elif (table, column) == ("ext_system", "auth_detail"):
+            elif (table, column) in {("ext_system", "auth_detail"), ("source_write_binding", "password_enc")}:
                 cleaned = ""
             else:
                 cleaned = sanitizer.cell(value) if value is not None else None
@@ -412,6 +412,8 @@ def self_check():
         )
         + "\t7\tordinary\t2\n\\.\n"
         "COPY public.ext_system (id, auth_detail) FROM stdin;\n1\tBearer abcdefghijklmnop\n\\.\n"
+        "COPY public.source_write_binding (id, password_enc, username) FROM stdin;\n"
+        "1\tfernet$writer-private\twriter\n\\.\n"
         "COPY public.alembic_version (version_num) FROM stdin;\ndata_0049_external_cdc\n\\.\n"
         "SELECT pg_catalog.setval('public.api_key_id_seq', 22, true);\n"
     )
@@ -428,6 +430,7 @@ def self_check():
     business_row = next(line for line in value.splitlines() if line.startswith("1\t{"))
     assert '"token_count":7,"key":"business","id":"one"' in decode_cell(business_row.split("\t")[1])
     assert "https://host/path" in value and "known-private" not in value
+    assert "writer-private" not in value and "1\t\twriter\n" in value
     assert manifest["tables"]["public.auth_session"]["outputRows"] == 0
     assert manifest["tables"]["public.business.table"]["outputRows"] == 1
     assert manifest["alembicRevision"] == ["data_0049_external_cdc"]

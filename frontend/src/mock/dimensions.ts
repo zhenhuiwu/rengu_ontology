@@ -154,7 +154,7 @@ const CAT_VALUES: DimValue[] = [
 export const DIM_ITEMS: DimItem[] = [
   // ———————————— 维度 ————————————
   {
-    id: 'time', name: '时间', api: 'dim_time', kind: '维度', group: '时间', status: '已发布', owner: '王敏',
+    id: 'time', name: '时间', api: 'dim_time', kind: '维度', group: '时间', status: '已发布', owner: 'admin',
     object: 'order', objectName: '订单', attr: '订单.下单时间（各对象的时间属性）', column: 'DIM.T_CALENDAR.cal_date',
     valueSrc: '公共日历表 DIM.T_CALENDAR（含财务结账月、节假日）', sync: '每年 12 月生成下一年日历',
     desc: '所有对象的时间属性都关联到公共日历表。周按 ISO 周（周一开始）；“月”默认自然月，财务结账以财务月为准。',
@@ -275,7 +275,7 @@ export const DIM_ITEMS: DimItem[] = [
     history: [BASE('陈立军')], since: 'v2026.03.2',
   },
   {
-    id: 'category', name: '商品品类', api: 'dim_category', kind: '维度', group: '商品', status: '已发布', owner: '王敏',
+    id: 'category', name: '商品品类', api: 'dim_category', kind: '维度', group: '商品', status: '已发布', owner: 'admin',
     object: 'category', objectName: '品类', attr: '商品.所属品类 → 品类（上级品类）', column: 'MDM.T_CATEGORY.category_id',
     valueSrc: '商品主数据 MDM.T_CATEGORY（三级）', sync: '每日 01:30 增量同步',
     desc: '三级品类加 SKU。商品经“所属品类”挂到小类，小类经“上级品类”逐级上卷到中类、大类。',
@@ -400,7 +400,7 @@ export const DIM_ITEMS: DimItem[] = [
 
   // ———————————— 码表 ————————————
   {
-    id: 'order_status', name: '订单状态', api: 'dict_order_status', kind: '码表', group: '交易', status: '已发布', owner: '王敏',
+    id: 'order_status', name: '订单状态', api: 'dict_order_status', kind: '码表', group: '交易', status: '已发布', owner: 'admin',
     object: 'order', objectName: '订单', attr: '订单.状态', column: 'ERP.T_SALE_ORDER.status',
     valueSrc: 'ERP 订单状态码 + WMS 出库状态，统一到 MDM.T_DICT（ORDER_STATUS）', sync: '码表变更时实时同步',
     desc: '订单生命周期状态，与状态机 SM-ORD（订单生命周期 v4）一致。CR-0004 起 ERP“已发货”和 WMS“OUTBOUND”统一为“已出库”。',
@@ -542,7 +542,7 @@ export const DIM_ITEMS: DimItem[] = [
     history: [BASE('孙浩然')], since: 'v2026.03.2',
   },
   {
-    id: 'product_status', name: '商品状态', api: 'dict_product_status', kind: '码表', group: '商品', status: '已发布', owner: '王敏',
+    id: 'product_status', name: '商品状态', api: 'dict_product_status', kind: '码表', group: '商品', status: '已发布', owner: 'admin',
     object: 'product', objectName: '商品', attr: '商品.状态', column: 'MDM.T_SKU.status',
     valueSrc: '商品主数据 MDM.T_SKU', sync: '每日 01:30 增量同步',
     desc: '商品的经营状态。只有“在售”的商品参与缺货率、毛利率预警。',

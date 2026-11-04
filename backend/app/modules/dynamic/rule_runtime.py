@@ -142,6 +142,10 @@ def selected_expression(base, definition):
             raise unavailable("草稿阈值没有可替换的标量表达式") from None
         original, unit = threshold(before["value"])
         replacement, new_unit = threshold(after["value"])
+        from app.modules.functions.output_paths import access, comparison_value
+        if access(node.left) is not None:
+            original = comparison_value(before["value"], original)
+            replacement = comparison_value(after["value"], replacement)
         if (
             len(node.ops) != 1
             or operators.get(type(node.ops[0])) != before.get("op")
@@ -158,7 +162,10 @@ class Expression(ast.NodeTransformer):
         self.obj, self.gov, self.event_fields = obj, gov, event_fields
         self.event_payload_fields = event_payload_fields
         self.function_specs, self.function_calls = functions or {}, {}
-        self.function_deadline = None
+        from app.modules.functions.executor import InvocationBudget
+        self.has_remote_functions = any(spec[0].get("runtimeMode") == "remote_http"
+                                        for spec in self.function_specs.values())
+        self.function_budget = InvocationBudget(remote_calls=self.has_remote_functions)
         self.relation_specs, self.relation_calls = relations or {}, {}
         self.columns, self.references, self.times = {}, {}, {}
         self.labels, self.column_labels = {}, {}
@@ -209,22 +216,7 @@ class Expression(ast.NodeTransformer):
             self.references[key], self.labels[key] = None, label
             return ast.Attribute(ast.Name(key[0], ast.Load()), key[1], ast.Load())
         if isinstance(node.func, ast.Name) and node.func.id == "rule_fn":
-            spec = self.function_specs.get(ast.dump(node))
-            if spec is None:
-                raise unavailable("固定函数版本没有安全绑定")
-            inputs = []
-            for arg in node.args[2:]:
-                if isinstance(arg, ast.Constant):
-                    inputs.append(("literal", arg.value))
-                else:
-                    ref = self.visit(arg)
-                    if not isinstance(ref, ast.Attribute) or not isinstance(ref.value, ast.Name):
-                        raise unavailable("函数输入字段无效")
-                    inputs.append(("reference", (ref.value.id, ref.attr)))
-            key = ("函数", f"值{len(self.function_calls)}")
-            self.function_calls[key] = (spec, inputs)
-            self.references[key], self.labels[key] = None, f"函数 {node.args[0].value} {node.args[1].value}"
-            return ast.Attribute(ast.Name(key[0], ast.Load()), key[1], ast.Load())
+            return self.function_reference(node, node)
         if (
             self.event_fields is not None
             or not isinstance(node.func, ast.Name)
@@ -240,6 +232,32 @@ class Expression(ast.NodeTransformer):
         self.labels[key] = (
             f"距{self.column_labels[column]}（{'小时' if node.func.id == 'hours_since' else '分钟'}）"
         )
+        return ast.Attribute(ast.Name(key[0], ast.Load()), key[1], ast.Load())
+
+    def visit_Subscript(self, node):  # noqa: N802
+        from app.modules.functions.output_paths import access
+        parsed = access(node)
+        if parsed is None:
+            raise unavailable("下标仅用于固定函数合同的标量返回路径")
+        return self.function_reference(node, parsed[0])
+
+    def function_reference(self, selection, call):
+        spec = self.function_specs.get(ast.dump(selection))
+        if spec is None:
+            raise unavailable("固定函数版本或返回路径没有安全绑定")
+        inputs = []
+        for arg in call.args[2:]:
+            if isinstance(arg, ast.Constant):
+                inputs.append(("literal", arg.value))
+            else:
+                ref = self.visit(arg)
+                if not isinstance(ref, ast.Attribute) or not isinstance(ref.value, ast.Name):
+                    raise unavailable("函数输入字段无效")
+                inputs.append(("reference", (ref.value.id, ref.attr)))
+        key = ("函数", f"值{len(self.function_calls)}")
+        self.function_calls[key] = (spec, inputs)
+        suffix = ".".join(spec[0].get("_outputPath", []))
+        self.references[key], self.labels[key] = None, f"函数 {call.args[0].value} {call.args[1].value} {suffix}".strip()
         return ast.Attribute(ast.Name(key[0], ast.Load()), key[1], ast.Load())
 
     def visit_Attribute(self, node):
@@ -266,7 +284,7 @@ class Expression(ast.NodeTransformer):
             self.labels[key] = self.column_labels[column]
         return node
 
-    def run(self, row, at):
+    async def run(self, row, at):
         refs = {}
         for key, column in self.references.items():
             if key in self.function_calls or key in self.relation_calls:
@@ -296,17 +314,19 @@ class Expression(ast.NodeTransformer):
             if source not in values:
                 raise Unavailable("关联对象不存在、不可见或尚未绑定")
             refs[key] = values[source]
-        from app.modules.functions.runtime import run as run_function
-        import time
-        if self.function_calls and self.function_deadline is None:
-            self.function_deadline = time.monotonic() + 2
+        from app.modules.functions.executor import invoke_snapshot
         for key, ((snapshot, names), inputs) in self.function_calls.items():
-            if time.monotonic() > self.function_deadline:
-                raise unavailable("规则函数总执行预算已用尽")
             values = {name: (refs[value] if kind == "reference" else value) for name, (kind, value) in zip(names, inputs, strict=True)}
             try:
-                refs[key] = run_function(snapshot["code"], snapshot["name"], values, snapshot["timeoutS"])
+                async def calculate(snap=snapshot, args=values):
+                    return await invoke_snapshot(snap, args, ontology_id=snap["_ontologyId"],
+                                                 code=snap["_functionCode"], version=snap["_functionVersion"])
+                from app.modules.functions.output_paths import project
+                output = await self.function_budget.run(calculate)
+                refs[key] = project(output, snapshot, snapshot.get("_outputPath", []))
             except AppError as exc:
+                if exc.code == "FUNCTION_RULE_LIMIT":
+                    raise
                 raise Unavailable(f"固定函数执行失败：{exc.message}") from None
         matched = evaluate(self.source, refs)
 
@@ -325,6 +345,12 @@ class Expression(ast.NodeTransformer):
 
 async def evaluate_target(session, user, definition, identity, *, event=None, snapshot=None, at=None):
     """Read one authorized business identity; never create hits, alerts or actions."""
+    from app.modules.governance.policy import enforce
+    from app.modules.static.lineage import identity as resource_identity
+    await enforce(session, user, [resource_identity("rule", definition.get("id"))], "execute", unmasked=True)
+    if event is not None:
+        from app.modules.governance.dynamic_guard import event_payload
+        await event_payload(session, user, event)
     from app.common.sql_guard import ensure_governed_tables
     from app.modules.integration.action_edits import existing_row
 
@@ -340,7 +366,7 @@ async def evaluate_target(session, user, definition, identity, *, event=None, sn
         from app.modules.dynamic.metric_rules import bind_metrics
         expression = await bind_metrics(session, user, tree, obj, gov, at, (definition.get("trigger") or {}).get("timezone", get_settings().display_tz), object_identity=identity, source_row=row)
         row["__identity"] = identity
-        return expression.run(row, at)[0]
+        return (await expression.run(row, at))[0]
     from app.modules.dynamic.event_rule_runtime import EventExpression
     from app.modules.dynamic.rule_functions import bind_rule_functions
     from app.modules.dynamic.rule_relations import bind_rule_relations
@@ -350,10 +376,13 @@ async def evaluate_target(session, user, definition, identity, *, event=None, sn
     relations = await bind_rule_relations(session, user, tree, obj, gov, source_row=row)
     expression = EventExpression(tree, field_paths(fields), snapshot or {}, event.definition_snapshot, obj, gov, functions, relations)
     inputs = {**event.payload, **{f"__object__.{column}": row[column] for column in expression.columns}}
-    return expression.run(inputs, at)[0]
+    return (await expression.run(inputs, at))[0]
 
 
 async def run_rule(session, user, base, definition, body, *, internal=False):
+    from app.modules.governance.policy import enforce
+    from app.modules.static.lineage import identity as resource_identity
+    await enforce(session, user, [resource_identity("rule", definition.get("id"))], "execute", unmasked=True)
     obj = await session.scalar(
         select(ObjectType).where(
             ObjectType.code == definition["objKind"], ObjectType.status == ObjectStatus.published
@@ -382,6 +411,7 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
     at, expected_digest = read_anchor(body.anchor, scope, now())
     trigger = definition.get("trigger") or {}
     tree = selected_expression(base, definition)
+    event_filter = None
     if body.mode == "snapshot":
         if trigger.get("kind") != "定时":
             raise unavailable("事件规则需要原始事件载荷，请选择历史事件回放")
@@ -434,6 +464,8 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
         if event_type is None or event_type.status.value == "草稿":
             raise unavailable("订阅事件类型不存在或尚未发布")
         fields = field_paths(event_type.payload)
+        from app.modules.governance.dynamic_guard import event_fields
+        await event_fields(session, user, event_type.code, event_type.payload)
         from app.modules.dynamic.event_rule_runtime import EventExpression
         from app.modules.versioning.repo import ReleaseRepo
 
@@ -484,6 +516,8 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
             )
             .order_by(Event.occurred_at, Event.id)
         )
+        from app.modules.governance.dynamic_guard import scope as governance_scope
+        statement = await governance_scope(session, user, statement, Event)
         rows = list(await session.scalars(statement.limit(10001)))
         candidates = [
             (event.id, event.object_id, event.obj_label or event.object_id, event.occurred_at, event.payload)
@@ -512,6 +546,18 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
     matched = unknown = evaluated = filtered = 0
     samples = []
     matches = []
+    for candidate_expression in (expression, event_filter):
+        if candidate_expression is not None and candidate_expression.has_remote_functions:
+            candidate_expression.function_budget.require_capacity(
+                len(candidates) * len(candidate_expression.function_calls)
+            )
+    if event_filter is not None and (expression.has_remote_functions or event_filter.has_remote_functions):
+        budget = (expression.function_budget if expression.has_remote_functions
+                  else event_filter.function_budget)
+        budget.require_capacity(
+            len(candidates) * (len(expression.function_calls) + len(event_filter.function_calls))
+        )
+        expression.function_budget = event_filter.function_budget = budget
     for identity, code, label, sample_at, row in candidates:
         try:
             if row is None:
@@ -520,10 +566,10 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
                 raise Unavailable("原始载荷不是可读取的字段对象")
             if body.mode == "snapshot" and not row.get("_identity_unique"):
                 raise Unavailable("业务编号对应多个对象记录，无法唯一定位")
-            if body.mode == "events" and event_filter and not event_filter.run(row, sample_at)[0]:
+            if body.mode == "events" and event_filter and not (await event_filter.run(row, sample_at))[0]:
                 filtered += 1
                 continue
-            hit, values = expression.run(row, sample_at)
+            hit, values = await expression.run(row, sample_at)
             evaluated += 1
             matched += int(hit)
             if not hit:
@@ -531,6 +577,8 @@ async def run_rule(session, user, base, definition, body, *, internal=False):
             matches.append({"objId": code, "objLabel": label, "value": values})
             diff = "条件满足（未执行动作）"
         except (Unavailable, AppError) as exc:
+            if isinstance(exc, AppError) and exc.code == "FUNCTION_RULE_LIMIT":
+                raise
             unknown += 1
             values, diff = "—", f"无法求值：{exc}"
         samples.append(

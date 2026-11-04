@@ -175,7 +175,10 @@ async def _code_map(session: AsyncSession, model: Any, ids: Iterable[int | None]
     want = {i for i in ids if i is not None}
     if not want:
         return {}
-    rows = (await session.execute(select(model.id, model.code).where(model.id.in_(want)))).all()
+    from app.modules.governance.dynamic_guard import scope
+    statement = await scope(session, session.info.get("governance_user"),
+        select(model.id, model.code).where(model.id.in_(want)), model)
+    rows = (await session.execute(statement)).all()
     return {r[0]: r[1] for r in rows}
 
 
@@ -229,6 +232,8 @@ class ActionService:
 
     # ---------- 输出 ----------
     async def to_out(self, runs: Sequence[ActionRun]) -> list[ActionRunOut]:
+        from app.modules.governance.dynamic_guard import authorize_records
+        await authorize_records(self.session, self.user, ActionRun, runs)
         await self.load_service_names(x for r in runs for x in (r.initiator, r.confirmer, r.approver))
         alert_codes = await _code_map(self.session, Alert, (r.alert_id for r in runs))
         run_codes = await _code_map(
@@ -363,6 +368,8 @@ class ActionService:
         )
 
     async def detail(self, r: ActionRun) -> ActionRunDetail:
+        from app.modules.governance.dynamic_guard import authorize_record
+        await authorize_record(self.session, self.user, ActionRun, r)
         if r.deleted_at is not None:
             raise NotFound("动作记录已删除")
         out = (await self.to_out([r]))[0]
@@ -422,6 +429,8 @@ class ActionService:
         )
         row = await self.session.scalar(stmt)
         if row is None:
+            if self.session.info.get("governance_dynamic_reason"):
+                raise AppError(self.session.info["governance_dynamic_reason"], code="GOVERNANCE_DYNAMIC_DENIED", status_code=403)
             raise NotFound("动作不存在或无权查看")
         return row
 
@@ -787,7 +796,7 @@ class ActionService:
         )
         if kind != obj.code:
             raise validation_failed("objKind", "目标对象类型与动作定义不匹配")
-        await existing_row(self.session, self.user, obj, governed, identity)
+        await existing_row(self.session, self.user, obj, governed, identity, lock=False)
         probe = SimpleNamespace(
             action_type_code=code,
             type_version=definition["version"],
@@ -1333,6 +1342,8 @@ class AlertService:
             stmt = stmt.with_for_update().execution_options(populate_existing=True)
         row = await self.session.scalar(stmt)
         if row is None:
+            if self.session.info.get("governance_dynamic_reason"):
+                raise AppError(self.session.info["governance_dynamic_reason"], code="GOVERNANCE_DYNAMIC_DENIED", status_code=403)
             raise NotFound("告警不存在或无权查看")
         return row
 
@@ -1340,6 +1351,12 @@ class AlertService:
         return (await self._visible_list([alert], {run.id: run} if run else {}))[0]
 
     async def _visible_list(self, alerts, links):
+        from app.modules.governance.dynamic_guard import authorize_records, scope
+        await authorize_records(self.session, self.user, Alert, alerts)
+        if links:
+            allowed = set(await self.session.scalars(await scope(self.session, self.user,
+                select(ActionRun.id).where(ActionRun.id.in_(links)), ActionRun)))
+            links = {key: value for key, value in links.items() if key in allowed}
         rows = [self._out(alert, links.get(alert.action_run_id)) for alert in alerts]
         visible = await visible_references(
             self.session, self.user, {(dim.obj_kind, dim.id) for row in rows for dim in row.dims}
@@ -1616,15 +1633,16 @@ class AlertService:
         """近 7 天同一规则、同一对象的触发次数（含本条），
         窗口 (triggeredAt − 7 天, triggeredAt]（Alerts.vue L81）。
         前端对 R-012 额外 +2 是演示用硬编码，按 §2.2 不做。"""
+        from app.modules.governance.dynamic_guard import read_scope
         n = await self.session.scalar(
-            select(func.count()).where(
+            await read_scope(self.session, self.user, select(func.count()).where(
                 Alert.deleted_at.is_(None),
                 Alert.rule_code == a.rule_code,
                 Alert.obj_kind == a.obj_kind,
                 Alert.obj_id == a.obj_id,
                 Alert.triggered_at > a.triggered_at - timedelta(days=7),
                 Alert.triggered_at <= a.triggered_at,
-            )
+            ), Alert)
         )
         return int(n or 0)
 
@@ -1661,6 +1679,8 @@ class AlertService:
         )
 
     async def detail(self, a: Alert) -> AlertDetail:
+        from app.modules.governance.dynamic_guard import authorize_record
+        await authorize_record(self.session, self.user, Alert, a)
         run = await self._run_of(a)
         rule = self.catalog.rule(a.rule_code)
         logs = await self.repo.logs(a.id)

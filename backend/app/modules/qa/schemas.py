@@ -44,10 +44,10 @@ CaliberLabel = Annotated[Annotated[str, Field(max_length=32)] | None, BeforeVali
 
 
 class SessionCreateIn(ApiModel):
-    """W2 请求体：{scope, caliber?}；caliber 省略 = 不含税（旧默认），传空 = 不限。"""
+    """W2 请求体：{scope?, caliber?}；不传 = 不限。范围/口径只来自当前本体的维度与口径变体。"""
 
-    scope: str | None = Field(default="华东", max_length=60)
-    caliber: CaliberLabel = "不含税"
+    scope: str | None = Field(default=None, max_length=60)
+    caliber: CaliberLabel = None
 
 
 class SessionPatchIn(ApiModel):

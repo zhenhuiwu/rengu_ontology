@@ -445,7 +445,7 @@ watch([baseline, cr.items, cr.head, isDraft, cr.loading], () => {
 
 let definitionSeq = 0, catalogSeq = 0;
 const definitionError = ref(''), catalogError = ref('');
-const catalogKey = () => JSON.stringify([staticContextKey(), isDraft.value ? cr.head.value?.id : '', isDraft.value ? cr.head.value?.lockVersion : 0, selectedId.value]);
+const catalogKey = () => JSON.stringify([staticContextKey(), isDraft.value ? cr.head.value?.id : '', isDraft.value ? cr.head.value?.lockVersion : 0, isDraft.value ? selectedId.value : '']);
 async function loadCatalog() {
   const n = ++catalogSeq, key = catalogKey(); catalogError.value = '';
   if (!isStaticReal()) return;
@@ -459,8 +459,10 @@ async function loadCatalog() {
   finally { if (n === catalogSeq && key === catalogKey()) catalogLoading.value = false; }
 }
 watch(catalogKey, () => void loadCatalog(), { immediate: true });
-watch(() => JSON.stringify([selectedId.value, staticContextKey(), route.query.view, workflow.loading.value,
-  draft.value?.id, cr.loading.value, cr.error.value, cr.head.value?.targets]), async () => {
+const linkDetailKey = () => JSON.stringify([selectedId.value, staticContextKey(), route.query.view,
+  route.query.view === 'draft' || draftOnly.value ? workflow.loading.value : false,
+  draft.value?.id, cr.loading.value, cr.error.value, cr.head.value?.targets]);
+watch(linkDetailKey, async () => {
   const n = ++definitionSeq, key = staticContextKey(), id = selectedId.value; definitionError.value = '';
   if (!isStaticReal() || !id || (route.query.view === 'draft' && workflow.loading.value)
     || (draft.value && (cr.loading.value || !cr.head.value || cr.error.value))
@@ -498,26 +500,26 @@ const deletion = useDefinitionDelete('link', {
   </Teleport>
 
   <div class="lt">
-    <div class="panel lt-list">
+    <div class="panel lt-list side-list">
       <div class="lt-filter">
         <a-input-search :value="kw" placeholder="搜索关系名、API 名或对象" allow-clear @change="(e: any) => (kw = e.target.value)" />
         <div class="lt-selects">
-          <a-select v-model:value="src" :options="SRC_OPTIONS" size="small" class="lt-sel" />
-          <a-select v-model:value="st" :options="ST_OPTIONS" size="small" class="lt-sel" />
+          <a-select v-model:value="src" :options="SRC_OPTIONS" class="lt-sel" />
+          <a-select v-model:value="st" :options="ST_OPTIONS" class="lt-sel" />
         </div>
       </div>
       <a-alert v-if="deletion.error.value || linkPage.error.value || definitionError || catalogError" type="error" :message="deletion.error.value || linkPage.error.value || definitionError || catalogError" show-icon><template v-if="catalogError" #action><a-button size="small" @click="loadCatalog">重试目录</a-button></template></a-alert>
       <div v-if="linkPage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
-      <ul class="lt-items" :aria-busy="linkPage.loading.value">
-        <li v-for="l in list" :key="l.id" :class="{ active: l.id === cur?.id }" :title="`${l.name} · ${objName(l.from)} → ${l.to ? objName(l.to) : '未选择'} · ${l.card}`" @click="pick(l.id)">
-          <div class="lt-row">
-            <span class="t-14 lt-name lt-ell">{{ l.name }}</span>
-            <span class="t-12 c-3 lt-ft">{{ objName(l.from) }} → {{ l.to ? objName(l.to) : '未选择' }}</span>
-            <span v-if="l.status !== '已发布'" class="t-12" :class="statusClass(l.status)">{{ l.status }}</span>
+      <ul class="lt-items side-list-items" :aria-busy="linkPage.loading.value">
+        <li v-for="l in list" :key="l.id" class="side-list-item" :class="{ active: l.id === cur?.id }" :title="`${l.name} · ${objName(l.from)} → ${l.to ? objName(l.to) : '未选择'} · ${l.card}`" @click="pick(l.id)">
+          <div class="lt-row side-list-row">
+            <span class="t-14 lt-name lt-ell side-list-name">{{ l.name }}</span>
+            <span class="t-12 c-3 lt-ft side-list-meta">{{ objName(l.from) }} → {{ l.to ? objName(l.to) : '未选择' }}</span>
+            <span v-if="l.status !== '已发布'" class="t-12 side-list-meta" :class="statusClass(l.status)">{{ l.status }}</span>
           </div>
         </li>
       </ul>
-      <div class="lt-foot">
+      <div class="lt-foot side-list-foot">
         <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" unit="条" class="lt-pager" empty-text="没有匹配的关系" />
       </div>
     </div>
@@ -834,18 +836,15 @@ const deletion = useDefinitionDelete('link', {
 .lt-suggestion-result { margin-top: 8px; color: var(--text-2); line-height: 1.6; }
 .lt-suggestion-hint { display: inline-block; margin-left: 8px; color: var(--text-3); font-size: 12px; }
 .lt { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.lt-list { width: 300px; flex: none; }
+.lt-list { flex: none; }
 .lt-filter { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 8px; flex: none; }
 .lt-selects { display: flex; gap: 8px; }
 .lt-sel { flex: 1; min-width: 0; }
-.lt-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
-.lt-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
-.lt-items li:hover { background: var(--g3); }
-.lt-items li.active { background: var(--brand-bg); }
-.lt-items li.active .lt-name { color: var(--brand); }
-.lt-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.lt-items { flex: 1; min-height: 0; }
+.lt-row { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 2px; }
+.lt-row .lt-name { flex: none; width: 100%; }
+.lt-ft { max-width: 100%; }
 .lt-pager { flex: 1; min-height: 0; }
-.lt-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; justify-content: space-between; }
 .lt-detail { flex: 1; min-width: 0; }
 .lt-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
 .lt-sp { flex: 1; }

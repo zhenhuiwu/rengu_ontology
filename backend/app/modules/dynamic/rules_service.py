@@ -239,7 +239,7 @@ class RuleService:
 
     async def meta(self) -> dict[str, Any]:
         from app.modules.action.models import TypeStatus
-        from app.modules.dynamic.catalog import get_catalog
+        from app.modules.dynamic.catalog import get_list_catalog
         from app.modules.event.models import EventPayloadField, EventType
         from app.modules.event.payload_schema import field_paths
 
@@ -255,7 +255,7 @@ class RuleService:
                 for r in rows
             )
         )
-        catalog = await get_catalog(self.session, self.user)
+        catalog = await get_list_catalog(self.session)
         confirmers = [p["name"] for p in catalog.data["people"] if catalog.person(p["name"])]
         sources = {"告警.对象", "告警.ID", "命中.对象", "规则.命中说明", "固定值"}
         for r in rows:
@@ -275,11 +275,13 @@ class RuleService:
 
         objects = list(
             await self.session.scalars(
-                select(ObjectType).where(ObjectType.status == ObjectStatus.published).order_by(ObjectType.id)
+                select(ObjectType).where(
+                    ObjectType.ontology_id == require_ontology_id(self.session),
+                    ObjectType.status == ObjectStatus.published,
+                ).order_by(ObjectType.id)
             )
         )
         from app.common.auth import row_filter
-        from app.common.ontology import require_ontology_id
         from app.common.row_filter import is_deny_all
         from app.common.sql_guard import ensure_governed_tables, governed_tables
 
@@ -309,7 +311,8 @@ class RuleService:
         functions = []
         if self.user.func.get("functions") in ("view", "manage"):
             from app.modules.functions.models import FnVersion, Function
-            from app.modules.functions.runtime import signature
+            from app.modules.functions.executor import definition_signature
+            from app.modules.functions.output_paths import options as output_options
             records = (await self.session.execute(
                 select(Function, FnVersion).join(FnVersion, FnVersion.function_id == Function.id)
                 .where(Function.status == "published", FnVersion.is_seed.is_(False))
@@ -320,22 +323,31 @@ class RuleService:
                 try:
                     if not isinstance(snapshot, dict) or type(snapshot.get("timeoutS")) is not int:
                         continue
-                    inputs, _ = signature(snapshot["code"], snapshot["name"])
+                    inputs, _ = definition_signature(snapshot)
                 except (AppError, KeyError, TypeError):
                     continue
-                functions.append({"id": function.code, "name": function.title, "version": version.ver, "inputs": [p["name"] for p in inputs]})
+                functions.append({"id": function.code, "name": function.title, "version": version.ver,
+                                  "inputs": [p["name"] for p in inputs], "outputPaths": output_options(snapshot)})
         relations = []
         if self.user.func.get("link-types") in ("view", "manage") and (self.user.func.get("object-search") in ("view", "manage") or self.user.func.get("object-detail") in ("view", "manage")):
             from app.common.auth import row_filter
             from app.common.row_filter import is_deny_all
-            from app.modules.dynamic.rule_relations import read_relation_binding
+            from sqlalchemy.orm import raiseload
+            from app.modules.dynamic.rule_relations import resolve_relation_binding
             from app.modules.static.models import DefStatus, LinkType
-            links = await self.session.scalars(select(LinkType).where(LinkType.status == DefStatus.published, LinkType.via.is_(None)).order_by(LinkType.id))
+            links = list(await self.session.scalars(select(LinkType).options(raiseload("*")).where(
+                LinkType.ontology_id == require_ontology_id(self.session)
+            ).order_by(LinkType.id)))
+            bindings = list(governed_tables(require_ontology_id(self.session), self.session).values())
             for link in links:
+                if link.status != DefStatus.published or link.via is not None:
+                    continue
                 if is_deny_all(await row_filter(self.user, link.from_code)) or is_deny_all(await row_filter(self.user, link.to_code)):
                     continue
                 try:
-                    bound, src, _, dst, gov, _, _ = await read_relation_binding(self.session, link.code)
+                    bound, src, _, dst, gov, _, _ = resolve_relation_binding(
+                        link.code, links, objects, bindings, require_ontology_id(self.session)
+                    )
                 except AppError:
                     continue
                 fields = [
@@ -497,7 +509,10 @@ class RuleService:
     async def _alerts(self, ids: set[int]) -> dict[int, Alert]:
         if not ids:
             return {}
-        return {a.id: a for a in (await self.session.scalars(select(Alert).where(Alert.id.in_(ids), Alert.deleted_at.is_(None)))).all()}
+        from app.modules.governance.dynamic_guard import read_scope
+        statement = await read_scope(self.session, self.user,
+            select(Alert).where(Alert.id.in_(ids), Alert.deleted_at.is_(None)), Alert)
+        return {a.id: a for a in await self.session.scalars(statement)}
 
     @staticmethod
     def hit_out(h: RuleHit, rule_code: str, alert: Alert | None) -> dict[str, Any]:
@@ -1234,7 +1249,7 @@ class LifecycleService:
 
     async def get(self, object_id: str) -> Lifecycle:
         lc = await self.session.scalar(select(Lifecycle).where(Lifecycle.code == object_id))
-        if lc is None:
+        if lc is None or lc.version is None:
             raise NotFound("该对象类型没有生命周期", details={"id": object_id})
         return lc
 
@@ -1272,10 +1287,20 @@ class LifecycleService:
         self, object_id: str, *, view: str | None, cr: str | None, release: OntologyRelease | None
     ) -> dict[str, Any]:
         """L1。?ver= 历史版本 = 该版发布时生效的状态机（lifecycleAsOf，取发布前最近的生命周期版本快照）。"""
+        if release is not None:
+            if isinstance(release.snapshot, dict) and "lifecycles" in release.snapshot:
+                saved = (release.snapshot.get("lifecycles") or {}).get(object_id)
+                if not saved:
+                    raise NotFound("该版本没有生命周期", details={"id": object_id})
+                lc = await self.session.scalar(select(Lifecycle).where(Lifecycle.code == object_id))
+                return {**deepcopy(saved), "versions": await self._versions(lc, release.published_at) if lc else [],
+                        "draft": None, "readonly": True}
         lc = await self.get(object_id)
         if release is not None:
             at = release.published_at
             vs = await self._versions(lc, at)
+            if not vs:
+                raise NotFound("该版本没有生命周期", details={"id": object_id})
             if vs and vs[0]["ver"] != lc.version:
                 v = await version_row(self.session, lc, vs[0]["ver"])
                 assert v is not None and v.snapshot is not None

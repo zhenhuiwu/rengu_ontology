@@ -17,6 +17,7 @@ import { fitColumns } from '@/tableColumns';
 import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 import AppPagination from '@/components/AppPagination.vue';
 import ActionHttpMappingEditor from '@/pages/ontology/ActionHttpMappingEditor.vue';
+import SourceDatabaseBindingModal from './SourceDatabaseBindingModal.vue';
 import { getHttpEndpoints, saveHttpEndpoints, type HttpEndpoint, type HttpEndpointSet } from '@/api/integration';
 import { useConfirmStore } from '@/stores/confirm';
 import { useAuthStore } from '@/stores/auth';
@@ -173,7 +174,7 @@ const cols = fitColumns([
   { title: '幂等键', key: 'idemKey', width: 130, ellipsis: true },
   { title: '耗时', key: 'ms', width: 80, align: 'right' as const },
   { title: '尝试', key: 'attempt', width: 50, align: 'right' as const },
-  { title: 'HTTP', key: 'http', width: 60, align: 'right' as const },
+  { title: '响应', key: 'http', width: 60, align: 'right' as const },
   { title: '结果', key: 'result', width: 150 },
   { title: '操作', key: 'op', width: 60 },
 ]);
@@ -299,7 +300,8 @@ async function persistEndpoint(remove = false) {
 }
 
 // 新建 / 编辑外部系统（?edit=EXT-WMS / ?edit=new）
-const CATEGORIES = ['CRM', 'ERP', 'OMS', 'WMS', 'SMS', '物流', '通知', '渠道', '审批', 'Webhook'];
+const databaseBindingOpen = ref(false);
+const CATEGORIES = ['CRM', 'ERP', 'OMS', 'WMS', 'SMS', '物流', '通知', '渠道', '审批', 'Webhook', '数据库写回'];
 const AUTHS = ['OAuth 2.0（客户端凭证）', 'AppID + AppSecret（OpenAPI）', 'mTLS + 服务令牌', 'API Key + HMAC 签名', 'AccessKey（RAM 子账号）', 'Token（服务账号）', 'CorpID + Secret', 'AppID + 签名', '无需授权'];
 const OWNERS = ['王敏', '陈立军', '何静', '刘婷', '孙浩然', '吴佳'];
 const blank = (): ExtSystem => ({
@@ -310,6 +312,7 @@ const editKey = computed(() => q('edit'));
 const editingRecord = ref<{ key: string; item: ExtSystem }>();
 const editing = computed(() => editKey.value === 'new' ? null : real ? editingRecord.value?.key === contextKey() && editingRecord.value.item.id === editKey.value ? editingRecord.value.item : null : systems.find((s) => s.id === editKey.value) ?? null);
 const form = reactive<ExtSystem>(blank());
+watch(() => form.endpoint, value => { if (value.startsWith('database://')) { form.category = '数据库写回'; form.auth = '无需授权'; } }, { immediate: true });
 const ownerOptions = computed(() => [...new Set([auth.user?.name || auth.user?.account || '', form.owner, ...(real ? systems.map(s => s.owner) : OWNERS)].filter(Boolean))].map(value => ({ value, label: value })));
 const formSnap = ref('');
 let editSeq = 0;
@@ -339,7 +342,7 @@ const formErrors = computed(() => {
   else if (systems.some((s) => s.name === form.name.trim() && s.id !== editing.value?.id)) e.push('系统名称已存在');
   if (!form.vendor.trim()) e.push('请填写供应商');
   const endpoint = form.endpoint.trim();
-  try {
+  if (!/^database:\/\/[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(endpoint)) try {
     const url = new URL(endpoint);
     if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.port === '0' || /[\s\\]/.test(endpoint)) e.push('系统地址须为有效的 HTTP 或 HTTPS 地址');
     else if (url.username || url.password || /^https?:\/\/[^/]*@/i.test(endpoint)) e.push('系统地址不能包含用户名或密码，请使用认证配置');
@@ -428,20 +431,20 @@ const deletion = useDefinitionDelete('external', {
   </Teleport>
   <a-alert v-if="deletion.error.value" type="error" :message="deletion.error.value" show-icon />
   <div class="ex">
-    <div class="panel ex-list">
+    <div class="panel ex-list side-list">
       <div class="panel-head">
         <span class="t-16 fw-600">外部系统</span>
-        <span class="t-14 c-2">共 {{ real ? systemTotal : systems.length }} 个</span>
+        <span class="t-12 c-3">共 {{ real ? systemTotal : systems.length }} 个</span>
       </div>
-      <div class="ex-items">
-        <div v-for="s in systems" :key="s.id" class="ex-item" :class="{ on: s.id === selected.id }" @click="setQuery({ sys: s.id, result: undefined, call: undefined })">
-          <div class="ex-l1" :title="`${s.name} · ${s.vendor} · ${s.env} · ${actionCount(s) ? actionCount(s) + ' 个动作' : '无动作写回'} · ${s.idempotent ? '支持幂等' : '不支持幂等'}`">
-            <span class="t-14 fw-600 c-1 ex-ellip">{{ s.name }}</span>
+      <div class="ex-items side-list-items">
+        <div v-for="s in systems" :key="s.id" class="ex-item side-list-item" :class="{ on: s.id === selected.id, active: s.id === selected.id }" @click="setQuery({ sys: s.id, result: undefined, call: undefined })">
+          <div class="ex-l1 side-list-row" :title="`${s.name} · ${s.vendor} · ${s.env} · ${actionCount(s) ? actionCount(s) + ' 个动作' : '无动作写回'} · ${s.idempotent ? '支持幂等' : '不支持幂等'}`">
+            <span class="t-14 ex-ellip side-list-name">{{ s.name }}</span>
             <a-tooltip :title="s.status === '降级' ? '最近 6 次调用有失败 / 结果未知' : undefined"><a-badge :status="statusBadge(s.status)" :text="s.status" class="ex-badge" /></a-tooltip>
           </div>
         </div>
       </div>
-      <AppPagination v-if="real" v-model:page="systemPage" variant="simple" :total="systemTotal" :size="10" unit="个" />
+      <div v-if="real && systemTotal > 10" class="side-list-foot"><AppPagination v-model:page="systemPage" variant="simple" :total="systemTotal" :size="10" unit="个" /></div>
     </div>
 
     <div v-if="!real || selected.id" class="panel ex-detail">
@@ -454,10 +457,11 @@ const deletion = useDefinitionDelete('external', {
           <span v-if="selected.status === '降级'" class="t-12 c-2">最近 6 次调用有失败 / 结果未知；结果未知不自动重试，需对账</span>
         </div>
         <a-space>
-          <a-tooltip :title="readonly ? reason : !real ? testUnavailable : undefined"><a-button :disabled="!real || readonly || !selected.id || selected.status === '停用'" :loading="testing" @click="testCall">测试调用</a-button></a-tooltip>
-          <a-button v-if="real" :disabled="readonly || !selected.id" :loading="probeBusy" @click="openProbe">探测配置</a-button>
+          <a-tooltip v-if="!selected.endpoint.startsWith('database://')" :title="readonly ? reason : !real ? testUnavailable : undefined"><a-button :disabled="!real || readonly || !selected.id || selected.status === '停用'" :loading="testing" @click="testCall">测试调用</a-button></a-tooltip>
+          <a-button v-if="real && !selected.endpoint.startsWith('database://')" :disabled="readonly || !selected.id" :loading="probeBusy" @click="openProbe">探测配置</a-button>
           <a-tooltip :title="reason"><a-button :disabled="readonly" @click="openEdit(selected.id)">编辑</a-button></a-tooltip>
-          <a-button v-if="real" :disabled="readonly" @click="openAuthorization">动作授权</a-button>
+          <a-button v-if="real && !selected.endpoint.startsWith('database://')" :disabled="readonly" @click="openAuthorization">动作授权</a-button>
+          <a-button v-if="real && selected.endpoint.startsWith('database://')" :disabled="readonly" @click="databaseBindingOpen = true">数据库写回授权</a-button>
         </a-space>
       </div>
       <div class="ex-cfg">
@@ -483,7 +487,7 @@ const deletion = useDefinitionDelete('external', {
           </a-descriptions-item>
         </a-descriptions>
       </div>
-      <div v-if="real" class="ex-interfaces">
+      <div v-if="real && !selected.endpoint.startsWith('database://')" class="ex-interfaces">
         <div class="ex-calls-head"><span class="t-16 fw-600">系统接口</span><a-button size="small" :disabled="readonly || !endpointSet" @click="editEndpoint()">新建接口</a-button></div>
         <div v-if="!endpointSet?.endpoints.length" class="c-3 ex-interface-empty">暂无接口。添加只读探测或业务执行接口。</div>
         <div v-for="item in endpointSet?.endpoints" :key="item.id" class="ex-interface-row">
@@ -491,6 +495,10 @@ const deletion = useDefinitionDelete('external', {
           <div class="c-3">{{ realLinked?.items.filter(a => a.httpEndpointId ? a.httpEndpointId === item.id : a.endpoint === `${item.method} ${item.path}`).map(a => a.name).join('、') || '暂无关联动作' }}</div>
           <a-button size="small" :disabled="readonly" @click="editEndpoint(item)">配置</a-button>
         </div>
+      </div>
+      <div v-if="real && selected.endpoint.startsWith('database://')" class="ex-interfaces">
+        <div class="ex-calls-head"><span class="t-16 fw-600">数据库写回</span></div>
+        <p class="c-3">通过“数据库写回授权”配置独立写账号、目标对象、固定动作版本与字段映射。业务更新与幂等回执在同一源事务提交；结果未知只对账，不重发。</p>
       </div>
       <div class="ex-calls-head">
         <span class="t-16 fw-600">最近调用</span>
@@ -560,7 +568,7 @@ const deletion = useDefinitionDelete('external', {
         <a-form-item label="供应商 / 产品" required class="ex-f2"><a-input v-model:value="form.vendor" placeholder="例如：富勒 FLUX" /></a-form-item>
         <a-form-item label="环境" class="ex-f1"><a-select v-model:value="form.env" :options="['生产', '测试'].map((v) => ({ value: v, label: v }))" /></a-form-item>
       </div>
-      <a-form-item label="系统基础地址" required extra="支持 HTTP 或 HTTPS，可包含基础路径，例如 http://host:8080/api"><a-input v-model:value="form.endpoint" class="num" /></a-form-item>
+      <a-form-item label="系统基础地址" required extra="HTTP(S)基础地址；数据库写回填写 database://数据连接编号，凭据在保存后的独立授权中配置"><a-input v-model:value="form.endpoint" class="num" /></a-form-item>
       <div class="ex-row">
         <a-form-item label="认证方式" class="ex-f2"><a-select v-model:value="form.auth" :options="AUTHS.map((v) => ({ value: v, label: v }))" /></a-form-item>
         <a-form-item label="负责人" class="ex-f1"><a-select v-model:value="form.owner" :options="ownerOptions" /></a-form-item>
@@ -612,21 +620,20 @@ const deletion = useDefinitionDelete('external', {
       <p v-if="authorization.selected.some(s => !authorization!.actions.some(a => a.id === s.id))">部分原授权的动作已不再发布，保存时将移除。</p>
     </template>
   </a-modal>
+  <SourceDatabaseBindingModal v-if="selected.id && selected.endpoint.startsWith('database://')" v-model:open="databaseBindingOpen" :system-id="selected.id" />
 </template>
 
 <style scoped>
 .ex-auth-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 .ex-auth-row :deep(.ant-select) { min-width: 200px; flex: 1; }
 .ex { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.ex-list { width: 320px; flex: none; }
-.ex-items { flex: 1; min-height: 0; overflow: hidden; }
-.ex-item { padding: 10px 16px; border-bottom: var(--border); border-left: 3px solid transparent; cursor: pointer; }
-.ex-item:hover { background: var(--g2); }
-.ex-item.on { background: var(--brand-bg); border-left-color: var(--brand); }
+.ex-list { flex: none; }
+.ex-items { flex: 1; min-height: 0; }
 .ex-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ex-cat { flex: none; min-width: 36px; text-align: center; border: var(--border); border-radius: 4px; color: var(--g8); line-height: 18px; padding: 0 4px; }
 .ex-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ex-badge { margin-left: auto; flex: none; }
+.ex-item :deep(.ant-badge-status-text) { color: var(--g9); font-size: 12px; line-height: 18px; font-weight: 400; }
 .ex-detail { flex: 1; min-width: 0; }
 .ex-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; padding: 14px 20px 10px; min-width: 0; }
 .ex-title { display: flex; flex: 1 1 480px; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }

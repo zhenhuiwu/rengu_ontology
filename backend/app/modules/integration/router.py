@@ -32,6 +32,8 @@ from app.modules.integration.service import ExtSystemService, WritebackCallServi
 from app.modules.integration.http_endpoints import HttpEndpoint, HttpEndpointsIn
 
 router = APIRouter(tags=["integration"])  # /api/data/v1
+from app.modules.integration.source_database import router as source_database_router
+router.include_router(source_database_router)
 
 
 class EffectRetryIn(ApiModel):

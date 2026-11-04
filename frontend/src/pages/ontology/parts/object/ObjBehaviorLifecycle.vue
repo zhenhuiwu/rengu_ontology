@@ -2,8 +2,7 @@
 import InfoTip from '@/components/InfoTip.vue';
 /**
  * 对象类型 · 行为 · 生命周期：状态机（X6）+ 迁移定义 / 近期状态变化 + 右侧详情。
- * props：objectId（对象类型 id，如 'order'）、readonly（只有草稿视图里为 false）。
- * 草稿单用 useDraftView('object', () => props.objectId) 取；草稿视图里可新增状态、新增 / 修改 / 删除迁移，改动标灰色“新增 / 修改 / 删除”。
+ * 真实模式通过表单直接创建、编辑生命周期；历史版本只读。旧草稿交互仅保留给离线演示模式。
  * 查看历史版本（?ver=）时显示该次发布时生效的生命周期，全部只读并写明原因。
  * URL：?lc= 选中项（s:状态 / t:迁移编号 / x:非法迁移），?lcv= 下方列表（defs / changes），?lcpage= 状态变化页码。
  * 数据：开关 dynamic 切到真接口（dynamicApi.isReal()）时状态机 / 非法迁移 / 状态变化来自后台 object-types/{id}/lifecycle*，
@@ -23,15 +22,17 @@ import { useAppStore } from '@/stores/app';
 import { releaseByVer } from '@/api/releases';
 import { colors, GRAY, STATUS, chrome } from '@/theme';
 import { useDraftView } from '../useDraftView';
+import { useReadonly } from '@/composables/useReadonly';
+import LifecycleEditor from './LifecycleEditor.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import {
-  LC_DRAFT_EDITS, OBJ_TYPE_KIND, OBJ_TYPE_NAME, changesOf, emptyLcDraft, illegalOf, lifecycleAsOf, trName,
+  LC_DRAFT_EDITS, OBJ_TYPE_KIND, OBJ_TYPE_NAME, changesOf, emptyLcDraft, illegalOf, lifecycleAsOf,
   type LcDraft, type LcState, type LcStateKind, type LcTransition, type LcTrigger,
 } from '@/mock/lifecycle';
-import { actionApi, actionTypes, eventTypes } from '@/api/action';
+import { actionTypes, eventTypes } from '@/api/action';
 import { message } from 'ant-design-vue';
-import { currentApiContext, isApiError, type PageResult } from '@/api/http';
+import { currentApiContext, isApiError } from '@/api/http';
 import {
   dynamicApi, getLifecycle, listLifecycleChanges, listLifecycleIllegal, saveLifecycleDraft, crErrText, type LifecycleDto,
 } from '@/api/dynamic';
@@ -43,17 +44,24 @@ const route = useRoute();
 const router = useRouter();
 const app = useAppStore();
 const confirm = useConfirmStore();
-const { draft, isDraft, editTip, readonly: histRo, reason } = useDraftView('object', () => props.objectId);
+const REAL_API = dynamicApi.isReal();
+const legacy = REAL_API ? null : useDraftView('object', () => props.objectId);
+const { readonly: histRo, reason } = useReadonly();
+const draft = computed(() => legacy?.draft.value);
+const isDraft = computed(() => legacy?.isDraft.value ?? false);
+const editTip = computed(() => legacy?.editTip.value ?? '');
+const editorOpen = ref(false);
+function openEditor() { if (editable.value) editorOpen.value = true; }
+async function lifecycleSaved() { await loadLc(); }
 
-const editable = computed(() => !props.readonly && isDraft.value && (!REAL_API || (!!remote.lc && !lcLoading.value && !loadError.value)));
+const editable = computed(() => !props.readonly && !histRo.value && (REAL_API ? !lcLoading.value && !loadError.value : isDraft.value));
 const roTip = computed(() => (histRo.value ? reason.value : editTip.value || '只读'));
 /* 对象类型目录：static 开关切到真接口时取本体对象类型（GET /object-types），否则用 mock 的对象类型表 */
 const objType = computed(() => OBJECT_TYPE_LIST.find((o) => o.id === props.objectId));
-const objName = computed(() => objType.value?.name ?? (isStaticReal() ? props.objectId : OBJ_TYPE_NAME[props.objectId] ?? props.objectId));
+const objName = computed(() => remote.lc?.objectName ?? objType.value?.name ?? (isStaticReal() ? props.objectId : OBJ_TYPE_NAME[props.objectId] ?? props.objectId));
 
 /* ───── 生效版本（历史版本取当时发布时间） ───── */
 const histAt = computed(() => (histRo.value && app.viewVersion ? releaseByVer(app.viewVersion)?.publishedAt ?? null : null));
-const REAL_API = dynamicApi.isReal();
 const live = computed(() => REAL_API);
 let mounted = true;
 onScopeDispose(() => { mounted = false; });
@@ -101,6 +109,7 @@ const transitions = computed<VTr[]>(() => {
     ...e.addTransitions.map((t) => ({ ...t, mark: '新增' as Mark })),
   ];
 });
+const trName = (t: { from: string; to: string }) => `${states.value.find(s => s.key === t.from)?.name ?? t.from} → ${states.value.find(s => s.key === t.to)?.name ?? t.to}`;
 const illegal = computed(() => (live.value ? remote.illegal : histAt.value ? [] : illegalOf(props.objectId)));
 const illegalTotal = computed(() => illegal.value.reduce((n, x) => n + x.count, 0));
 const showIllegal = ref(true);
@@ -159,7 +168,7 @@ function draw(fit: boolean) {
           strokeWidth: on || s.kind === '初始' ? 2 : 1, strokeDasharray: s.mark ? '4 3' : '', cursor: 'pointer' },
         inner: end ? { x: 3, y: 3, width: NW - 6, height: NH - 6, rx: 3, ry: 3, fill: 'none', stroke: on ? colors.brand : GRAY.g7, strokeWidth: 1, pointerEvents: 'none' } : { display: 'none' },
         name: { text: s.name, refX: 0.5, refY: 22, textAnchor: 'middle', textVerticalAnchor: 'middle', fontSize: 14, fontWeight: 600, fill: on ? colors.brand : GRAY.g10, pointerEvents: 'none' },
-        sub: { text: s.mark ? `${s.mark} · ${s.kind}` : `${s.kind} · ${fmt(s.count)} 条`, refX: 0.5, refY: 41, textAnchor: 'middle', textVerticalAnchor: 'middle', fontSize: 12, fill: GRAY.g8, pointerEvents: 'none' },
+        sub: { text: s.mark ? `${s.mark} · ${s.kind}` : REAL_API ? s.kind : `${s.kind} · ${fmt(s.count)} 条`, refX: 0.5, refY: 41, textAnchor: 'middle', textVerticalAnchor: 'middle', fontSize: 12, fill: GRAY.g8, pointerEvents: 'none' },
       },
     }));
   }
@@ -237,16 +246,16 @@ async function loadLc() {
   if (!mounted || !props.objectId) { lcLoading.value = false; return; }
   await guard(getLifecycle(props.objectId, cr), (r) => {
     remote.lc = r; remote.key = k;
-    if (cr && r.draft) remote.edits[`${cr}:${props.objectId}`] = r.draft.edits;
+    if (cr && r?.draft) remote.edits[`${cr}:${props.objectId}`] = r.draft.edits;
   }, current);
   if (!current()) return;
-  await guard(listLifecycleIllegal(props.objectId), (r) => { remote.illegal = r; }, current);
+  if (base.value?.ruleId) await guard(listLifecycleIllegal(props.objectId), (r) => { remote.illegal = r; }, current);
   if (current()) lcLoading.value = false;
 }
 let changesSeq = 0;
 async function loadChanges() {
   const my = ++changesSeq;
-  if (!mounted || !props.objectId || view.value !== 'changes') return;
+  if (!mounted || !props.objectId || !remote.lc || view.value !== 'changes') return;
   const k = `${lcKey.value}|${onlyIllegal.value}|${pq.page.value}|${pq.size.value}`;
   await guard(listLifecycleChanges(props.objectId, onlyIllegal.value, pq.page.value, pq.size.value), (r) => {
     remote.changes = r;
@@ -255,7 +264,8 @@ async function loadChanges() {
 }
 if (live.value) {
   watch(lcKey, loadLc, { immediate: true, flush: 'sync' });
-  watch(() => [lcKey.value, view.value, onlyIllegal.value, pq.page.value, pq.size.value], loadChanges, { immediate: true, flush: 'sync' });
+  watch(() => [lcKey.value, remote.lc?.version, view.value, onlyIllegal.value, pq.page.value, pq.size.value], loadChanges, { immediate: true, flush: 'sync' });
+  watch(lcKey, () => { editorOpen.value = false; }, { flush: 'sync' });
 }
 /** 状态变化里的对象可点开：对象类型在本体里（真接口）或 mock 对象类型表里、且注册表有这个 kind 的解析器，就按对象类型 id 引用 */
 const refKind = computed(() => ((objType.value || OBJ_TYPE_KIND[props.objectId]) && canResolve(props.objectId) ? props.objectId : ''));
@@ -264,8 +274,8 @@ const defCols = [
   { title: '迁移', key: 'tr', width: 170 },
   { title: '触发', key: 'trigger', width: 64 },
   { title: '来源', key: 'by', ellipsis: true },
-  { title: '条件', key: 'guard', width: 210, ellipsis: true },
-  { title: '结果', key: 'effect', width: 210, ellipsis: true },
+  { title: '条件说明', key: 'guard', width: 210, ellipsis: true },
+  { title: '结果说明', key: 'effect', width: 210, ellipsis: true },
   { title: '近 7 天', key: 'weekly', width: 90, align: 'right' as const },
 ];
 const chgCols = computed(() => [
@@ -275,24 +285,9 @@ const chgCols = computed(() => [
   { title: '依据', key: 'rule' },
   { title: '来源', key: 'by', width: 240 },
 ]);
-/* 动作 / 事件类型目录：action 开关切到真接口时读其接口（只读，src/api/action.ts），否则读 mock */
-const remoteCatalog = ref<{ actions: { id: string; name: string }[]; events: { id: string; name: string }[] }>({ actions: [], events: [] });
-let catalogSeq = 0;
-if (actionApi.isReal()) watch(lcKey, async (key) => {
-  const my = ++catalogSeq;
-  remoteCatalog.value = { actions: [], events: [] };
-  async function list(path: string) {
-    const rows: { id: string; name: string }[] = [];
-    for (let page = 1; ; page++) {
-      const r = await actionApi.get<PageResult<{ id: string; name: string }>>(path, { query: { page, size: 200 } });
-      rows.push(...r.items);
-      if (!r.items.length || rows.length >= r.total) return rows;
-    }
-  }
-  await guard(Promise.all([list('/action-types'), list('/event-types')]), ([actions, events]) => { remoteCatalog.value = { actions, events }; }, () => mounted && my === catalogSeq && key === lcKey.value);
-}, { immediate: true, flush: 'sync' });
-const actionTypeById = (id: string) => (REAL_API ? remoteCatalog.value.actions : actionTypes()).find((a) => a.id === id);
-const EVENT_NAME = computed(() => Object.fromEntries((REAL_API ? remoteCatalog.value.events : eventTypes()).map((e) => [e.id, e.name])));
+// Real definitions already include their source label; load selectable capabilities only in the editor.
+const actionTypeById = (id: string) => (REAL_API ? [] : actionTypes()).find((a) => a.id === id);
+const EVENT_NAME = computed(() => Object.fromEntries((REAL_API ? [] : eventTypes()).map((e) => [e.id, e.name])));
 const byLink = (t: LcTransition) => (t.actionId ? { path: '/build/ontology/action-types', query: { action: t.actionId } }
   : t.eventId ? { path: '/build/ontology/event-types', query: { event: t.eventId } } : null);
 const byTitle = (t: LcTransition) => (t.actionId ? `动作类型 ${actionTypeById(t.actionId)?.name ?? t.actionId}` : t.eventId ? `事件类型 ${EVENT_NAME.value[t.eventId] ?? t.eventId}` : '');
@@ -407,12 +402,17 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
         <span v-if="histAt" class="t-12 c-3">{{ reason }}；显示该版本发布时生效的 v{{ base.version }}</span>
         <span class="lc-sp" />
         <a-checkbox v-if="illegal.length" v-model:checked="showIllegal"><span class="t-14">显示近 7 天非法迁移</span></a-checkbox>
+        <a-tooltip v-if="REAL_API" :title="editable ? '' : roTip">
+          <a-button :disabled="!editable" type="primary" @click="openEditor">编辑生命周期</a-button>
+        </a-tooltip>
+        <template v-else>
         <a-tooltip :title="editable ? '' : roTip">
           <a-button :disabled="!editable" @click="openState">新增状态</a-button>
         </a-tooltip>
         <a-tooltip :title="editable ? '' : roTip">
           <a-button :type="editable ? 'primary' : 'default'" :disabled="!editable" @click="openTr()">新增迁移</a-button>
         </a-tooltip>
+        </template>
       </div>
 
       <div class="lc-main">
@@ -480,7 +480,7 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
             </div>
             <a-descriptions :column="1" size="small" bordered class="lc-desc">
               <a-descriptions-item label="说明">{{ selState.desc }}</a-descriptions-item>
-              <a-descriptions-item label="当前对象数"><span class="num">{{ fmt(selState.count) }}</span> 条</a-descriptions-item>
+              <a-descriptions-item v-if="!REAL_API" label="当前对象数"><span class="num">{{ fmt(selState.count) }}</span> 条</a-descriptions-item>
               <a-descriptions-item label="时限">{{ selState.sla ?? '—' }}</a-descriptions-item>
             </a-descriptions>
             <div class="t-14 fw-600 c-1">进入（{{ trsOf(selState.key, 'in').length }}）</div>
@@ -495,8 +495,9 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
             </ul>
             <div v-for="w in warnings.filter((x) => x.includes(`“${selState!.name}”`))" :key="w" class="t-12 tl-attention">校验：{{ w }}</div>
             <div v-if="editable" class="lc-acts">
-              <a-button @click="openTr()">从这里新增迁移</a-button>
-              <a-button v-if="selState.mark === '新增'" danger @click="removeState(selState)">删除状态</a-button>
+              <a-button v-if="REAL_API" @click="openEditor">编辑状态</a-button>
+              <template v-else><a-button @click="openTr()">从这里新增迁移</a-button>
+              <a-button v-if="selState.mark === '新增'" danger @click="removeState(selState)">删除状态</a-button></template>
             </div>
           </template>
 
@@ -517,8 +518,8 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
               <a-descriptions-item label="近 7 天"><span class="num">{{ fmt(selTr.weekly) }}</span> 次</a-descriptions-item>
             </a-descriptions>
             <div v-if="editable" class="lc-acts">
-              <a-button @click="openTr(selTr)">修改</a-button>
-              <a-button danger @click="removeTr(selTr)">删除迁移</a-button>
+              <a-button @click="REAL_API ? openEditor() : openTr(selTr)">修改</a-button>
+              <a-button v-if="!REAL_API" danger @click="removeTr(selTr)">删除迁移</a-button>
             </div>
           </template>
 
@@ -583,9 +584,12 @@ const trsOf = (key: string, dir: 'in' | 'out') => transitions.value.filter((t) =
     </template>
 
     <div v-else-if="!lcLoading && !loadError" class="lc-empty">
-      <div class="t-14 c-2">{{ objName }}没有状态属性，未定义生命周期。</div>
-      <div class="t-12 c-3">需要跟踪状态变化时，先在属性里加状态字段，再在草稿里定义状态和迁移。</div>
+      <a-empty description="尚未定义生命周期">
+        <a-button v-if="REAL_API" type="primary" :disabled="!editable" @click="openEditor">新建生命周期</a-button>
+      </a-empty>
     </div>
+
+    <LifecycleEditor v-if="REAL_API" v-model:open="editorOpen" :object-id="objectId" :lifecycle="remote.lc" :readonly="!editable" @saved="lifecycleSaved" />
 
     <a-modal :open="stOpen" title="新增状态" @cancel="closeSt" :ok-button-props="{ disabled: !!stErr }" ok-text="加入草稿" @ok="saveState">
       <a-form layout="vertical">

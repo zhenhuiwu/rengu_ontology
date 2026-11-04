@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from app.common.metricflow_engine import METRIC_TIME, MetricQueryInvalid
+from app.common.metricflow_engine import METRIC_TIME, MetricQueryInvalid, metric_time_dimension
 
 OPS = ("=", "<>", "!=", ">=", "<=", ">", "<")
 GRAINS = ("day", "none")
@@ -47,6 +47,7 @@ class MetricPlan:
     where: list[str] = field(default_factory=list)
     labels: dict[str, str] = field(default_factory=dict)  # 输出列名 → 中文标题
     echo: dict[str, Any] = field(default_factory=dict)  # 回答里展示的指标查询（不含 SQL）
+    caliber: str = CALIBER
 
 
 async def metric_layer(session, user) -> dict[str, Any] | None:
@@ -101,15 +102,27 @@ def semantic_lines(manifest: dict[str, Any] | None) -> list[str]:
         if model := metric_model(manifest, m["name"]):
             by_model.setdefault(model, []).append(m)
     out = []
+    for m in top_metrics(manifest)[:MAX_METRICS]:
+        if m.get("type") == "program":
+            out.append(f"- 组合指标 {m['name']}：{m.get('label') or m['name']}；固定版本引用，"
+                       "使用 metric 查询；支持 time.grain=day/week/month/none，不能追加维度或过滤。"
+                       "窗口查询必须给 time.start/end，整体快照可不写 time。")
     for model in manifest.get("semantic_models") or []:
         ms = by_model.get(model["name"])
         if not ms:
             continue
-        time_dim = (model.get("defaults") or {}).get("agg_time_dimension")
         out.append(f"### 模型 {model['name']}（{model.get('label') or model['name']}）")
         for m in ms:
             unit = ((m.get("config") or {}).get("meta") or {}).get("rengu", {}).get("unit")
-            out.append(f"- 指标 {m['name']}：{m.get('label') or m['name']}" + (f"（{unit}）" if unit else ""))
+            try:
+                time_model, time_dim = metric_time_dimension(manifest, [m["name"]])
+                time_hint = f"；time 按 {time_model}__{time_dim} 过滤"
+            except MetricQueryInvalid:
+                time_hint = "；无唯一时间字段，不支持 time"
+            out.append(
+                f"- 指标 {m['name']}：{m.get('label') or m['name']}"
+                + (f"（{unit}）" if unit else "") + time_hint
+            )
         dims = [
             f"{model['name']}__{d['name']}（{d.get('label') or d['name']}"
             + ("，时间" if d.get("type") == "time" else "")
@@ -117,9 +130,26 @@ def semantic_lines(manifest: dict[str, Any] | None) -> list[str]:
             for d in model.get("dimensions") or []
         ]
         out.append("- 维度：" + ("、".join(dims) if dims else "无"))
-        if time_dim:
-            out.append(f"- 时间：time 按 {model['name']}__{time_dim} 过滤；grain=day 时输出列 {METRIC_TIME}")
     return out
+
+
+async def execute_program(session, user, obj, manifest, now, limit):
+    from app.modules.static.metric_program import query_programs
+
+    body = obj.get("metric") if isinstance(obj.get("metric"), dict) else {}
+    names = body.get("metrics") or []
+    if not isinstance(names, list) or any(not isinstance(n, str) for n in names):
+        raise MetricPlanInvalid("指标名称须为数组")
+    result = await query_programs(session, user, manifest, names,
+                                  group_by=body.get("dimensions") or [],
+                                  where=body.get("filters") or [],
+                                  time_range=body.get("time"), now=now, limit=limit)
+    if result is None:
+        return None
+    labels = {m["name"]: m.get("label") or m["name"] for m in manifest["metrics"]}
+    labels[METRIC_TIME] = TIME_LABEL
+    p = MetricPlan(names, labels=labels, echo=body, caliber="固定版本指标组合 · 受控确定性执行")
+    return p, result
 
 
 def _scalar(value: Any) -> str:
@@ -165,6 +195,10 @@ def plan(obj: dict[str, Any], manifest: dict[str, Any], now: datetime) -> Metric
         raise MetricPlanInvalid("指标层只支持按天（day）或整段汇总（none）", details={"grain": grain})
     if grain == "day" and METRIC_TIME not in group_by:
         group_by.append(METRIC_TIME)
+    time_ref = None
+    if METRIC_TIME in group_by or time.get("start") or time.get("end"):
+        time_model, time_dim = metric_time_dimension(manifest, metrics)
+        time_ref = f"{time_model}__{time_dim}"
     where = []
     for f in body.get("filters") or []:
         if not isinstance(f, dict):
@@ -181,12 +215,7 @@ def plan(obj: dict[str, Any], manifest: dict[str, Any], now: datetime) -> Metric
         where.append(f"{tag} {op} {_scalar(f.get('value'))}")
     window: dict[str, str] = {}
     if time.get("start") or time.get("end"):
-        model_name = metric_model(manifest, metrics[0])
-        model = next((m for m in manifest.get("semantic_models") or [] if m["name"] == model_name), None)
-        tname = ((model or {}).get("defaults") or {}).get("agg_time_dimension")
-        if not tname:
-            raise MetricPlanInvalid("该指标没有默认时间维度，不能按时间过滤", details={"metric": metrics[0]})
-        ref = f"{{{{ TimeDimension('{model_name}__{tname}', 'day') }}}}"
+        ref = f"{{{{ TimeDimension('{time_ref}', 'day') }}}}"
         if time.get("start"):
             window["start"] = _time_value(time["start"])
             where.append(f"{ref} >= '{window['start']}'")

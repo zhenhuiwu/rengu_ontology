@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 import re
+import threading
 from datetime import UTC, datetime
 from sqlalchemy import column, inspect, select, table, text
 from sqlalchemy.sql import quoted_name
@@ -122,6 +123,24 @@ FROM DUAL'''
     return [ownership, create_journal, create_trigger]
 
 
+_ENGINE_LOCK = threading.Lock()
+_ENGINES = {}
+
+
+def _cached_engine(kind, cfg, host):
+    key = (kind, host, int(cfg['port']), cfg.get('user') or '',
+           hashlib.sha256((cfg.get('password') or '').encode()).hexdigest(), bool(cfg.get('ssl')))
+    with _ENGINE_LOCK:
+        engine = _ENGINES.get(key)
+        if engine is None:
+            if len(_ENGINES) >= 8:
+                _, retired = _ENGINES.popitem()
+                retired.dispose()
+            engine = connector._engine(kind, {**cfg, 'host': host}, pooled=True)
+            _ENGINES[key] = engine
+        return engine
+
+
 async def _run(kind, cfg, operation, *, write=False, stage='源CDC检查'):
     if kind != KIND:
         raise AppError('当前事务触发器CDC仅支持达梦DM8', code='CDC_SOURCE_UNSUPPORTED', status_code=422)
@@ -134,10 +153,13 @@ async def _run(kind, cfg, operation, *, write=False, stage='源CDC检查'):
         raise AppError('未授权连接此CDC数据源', code='CDC_SOURCE_NOT_ALLOWED', status_code=403)
 
     def execute():
-        engine = connector._engine(kind, {**cfg, 'host': pinned})
+        engine = _cached_engine(kind, cfg, pinned)
         try:
             with engine.connect() as conn:
                 if not write:
+                    # A pooled DM connection may carry an implicit transaction from
+                    # the previous checkout; READ ONLY must start a clean transaction.
+                    conn.rollback()
                     conn.exec_driver_sql('SET TRANSACTION READ ONLY')
                 result = operation(conn)
                 if write:
@@ -149,8 +171,6 @@ async def _run(kind, cfg, operation, *, write=False, stage='源CDC检查'):
             # Do not expose driver SQL, credentials, keys or source payloads.
             raise AppError(f'{stage}失败；已提交的捕获对象和未确认变更均保留，可检查权限或连接后重试',
                            code='CDC_SOURCE_OPERATION_FAILED', status_code=409) from None
-        finally:
-            engine.dispose()
 
     return await asyncio.to_thread(execute)
 
@@ -226,7 +246,10 @@ def _validate_conn(conn, capture):
     row = conn.execute(text('SELECT TABLE_OWNER,TABLE_NAME,STATUS,TRIGGER_BODY FROM ALL_TRIGGERS '
                             'WHERE OWNER=:owner AND TRIGGER_NAME=:name'),
                        {'owner': capture['schema'], 'name': capture['resources']['trigger']}).first()
-    if (not row or row[0] != capture['schema'] or row[1] != capture['table']
+    # DM reports catalog identifiers folded to upper case even when the quoted
+    # source objects were created lower case (this imported schema does that).
+    if (not row or str(row[0]).casefold() != capture['schema'].casefold()
+            or str(row[1]).casefold() != capture['table'].casefold()
             or str(row[2]).upper() not in ('Y', 'ENABLED', 'VALID') or not _trigger_matches(row[3], capture)):
         raise SourceCaptureInvalid('CDC触发器被禁用、定义变化或目标表不匹配')
     pending, oldest = conn.exec_driver_sql(f'SELECT COUNT(*), MIN("captured_at") FROM {_qualified(capture, "journal")}').one()
@@ -310,6 +333,19 @@ async def validate(kind, cfg, capture):
     return await _run(kind, cfg, lambda conn: _validate_conn(conn, capture))
 
 
+async def pending(kind, cfg, capture):
+    """Cheap idle probe: read the private journal only, without re-reflecting the source."""
+    capture = _capture(capture)
+    connector.require_configured_schema(kind, cfg, [capture['schema']])
+
+    def query(conn):
+        count, oldest = conn.exec_driver_sql(
+            f'SELECT COUNT(*), MIN("captured_at") FROM {_qualified(capture, "journal")}').one()
+        return {'pendingCount': int(count), 'oldestCapturedAt': _utc_iso(oldest),
+                'sourceTimeZoneKnown': True}
+    return await _run(kind, cfg, query, stage='源CDC变更检查')
+
+
 def _source_table(capture):
     return table(quoted_name(capture['table'], True),
                  *(column(quoted_name(name, True)) for name in capture['readColumns']),
@@ -366,7 +402,9 @@ async def ack(kind, cfg, capture, event_ids):
         return 0
 
     def apply(conn):
-        _validate_conn(conn, capture)
+        # The batch was fully validated by read_changes before PG committed it.
+        # ACK only needs the generation guard: a replaced capture cannot consume
+        # or delete another generation's journal rows.
         journal = _qualified(capture, 'journal')
         params = {'generation': capture['generation'], **{f'id{i}': value for i, value in enumerate(event_ids)}}
         placeholders = ','.join(f':id{i}' for i in range(len(event_ids)))

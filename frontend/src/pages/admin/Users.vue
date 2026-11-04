@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { adminApiOn, queryUsers, type UserRow } from '@/api/admin';
+import { adminApiOn, fetchCurrentAccount, type AccountDetails } from '@/api/admin';
 import { currentApiContext, isApiError } from '@/api/http';
 
-const account = ref<UserRow | null>(null);
+const account = ref<AccountDetails | null>(null);
 const loading = ref(false);
 const error = ref('');
 let request = 0;
@@ -19,10 +19,10 @@ async function reload() {
   }
   loading.value = true;
   try {
-    const result = await queryUsers({ dept: '全部', status: '启用', kw: 'U010001', page: 1, size: 10 });
+    const result = await fetchCurrentAccount();
     if (sequence !== request || context !== JSON.stringify(currentApiContext())) return;
-    account.value = result?.items.find((user) => user.id === 'U010001' && user.account === 'admin') ?? null;
-    if (!account.value) error.value = '未找到启用的 admin 账号';
+    account.value = result;
+    if (!account.value) error.value = '当前账号信息不可用';
   } catch (cause) {
     if (sequence === request && context === JSON.stringify(currentApiContext())) {
       error.value = isApiError(cause) ? cause.message : '账号信息加载失败';

@@ -42,7 +42,10 @@ class CurrentVersionOut(ApiModel):
 
 
 class ReleaseListOut(ApiModel):
-    """GET /releases：不分页。items = 前端 RELEASES（新→旧）；current = CURRENT_VERSION。"""
+    """Formal releases, newest first; pagination fields appear only when explicitly requested."""
 
     items: list[ReleaseOut]
     current: str | None
+    total: int | None = None
+    page: int | None = None
+    size: int | None = None

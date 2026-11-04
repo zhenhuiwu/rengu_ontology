@@ -180,9 +180,76 @@ def compile_metrics(
     for text in where:
         if not isinstance(text, str) or not _USER_WHERE.match(text):
             raise MetricQueryInvalid("where 只支持「维度引用 比较符 标量」", details={"where": text})
-    if backend != "builtin" and metricflow_available():
+    if METRIC_TIME in group_by:
+        metric_time_dimension(manifest, metrics)
+    if backend != "builtin" and not _snapshot_metrics(manifest, metrics) and metricflow_available():
         return CompiledQuery(_compile_metricflow(manifest, metrics, group_by, where, limit), "metricflow")
     return CompiledQuery(_compile_builtin(manifest, metrics, group_by, where, limit), "builtin")
+
+
+def _selected_metrics(man: _Manifest, metrics: list[str]):
+    """Visit only requested metrics and their declared derived components."""
+    pending, seen = list(metrics), set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        metric = man.metric(name)
+        yield metric
+        if metric.get("type") == "derived":
+            pending.extend(c["name"] for c in (metric.get("type_params") or {}).get("metrics") or [])
+
+
+def _metric_meta(metric: dict) -> dict:
+    return ((metric.get("config") or {}).get("meta") or {}).get("rengu") or {}
+
+
+def _measure_time(model: dict, measure: dict, metric: dict) -> str | None:
+    meta = _metric_meta(metric)
+    if meta.get("hasTimeField") is False:
+        return None
+    name = measure.get("agg_time_dimension")
+    if not name and "hasTimeField" not in meta:
+        name = (model.get("defaults") or {}).get("agg_time_dimension")
+    return name
+
+
+def metric_time_dimension(manifest: dict[str, Any], metrics: list[str]) -> tuple[str, str]:
+    """Resolve one declared time field shared by every selected simple component."""
+    man = _Manifest(manifest)
+    times = set()
+    for metric in _selected_metrics(man, metrics):
+        if _metric_meta(metric).get("hasTimeField") is False:
+            raise MetricQueryInvalid(
+                "该指标未定义时间字段，只能查询当前快照", details={"metric": metric["name"]}
+            )
+        if metric.get("type") == "derived":
+            continue
+        model, measure, _ = man.simple(metric["name"])
+        name = _measure_time(model, measure, metric)
+        if not name:
+            raise MetricQueryInvalid("指标没有明确的时间字段", details={"metric": metric["name"]})
+        _, is_time = man.dimension(model, f"{model['name']}__{name}")
+        if not is_time:
+            raise MetricQueryInvalid("指标时间字段不是时间维度", details={"metric": metric["name"]})
+        times.add((model["name"], name))
+    if len(times) != 1:
+        raise MetricQueryInvalid("所选指标没有唯一共同的时间字段，请分别查询")
+    return next(iter(times))
+
+
+def _snapshot_metrics(manifest: dict[str, Any], metrics: list[str]) -> bool:
+    """Snapshot measures use builtin without inventing MetricFlow event time."""
+    man = _Manifest(manifest)
+    for metric in _selected_metrics(man, metrics):
+        if _metric_meta(metric).get("hasTimeField") is False:
+            return True
+        if metric.get("type") != "derived":
+            model, measure, _ = man.simple(metric["name"])
+            if not _measure_time(model, measure, metric):
+                return True
+    return False
 
 
 def _compile_builtin(
@@ -226,9 +293,7 @@ def _compile_builtin(
     dims: list[exp.Expression] = []
     for ref in dict.fromkeys(group_by):
         if ref == METRIC_TIME:
-            tname = (model.get("defaults") or {}).get("agg_time_dimension")
-            if not tname:
-                raise MetricQueryInvalid("模型没有默认时间维度", details={"model": model["name"]})
+            _, tname = metric_time_dimension(manifest, metrics)
             d, _ = man.dimension(model, f"{model['name']}__{tname}")
             dims.append(exp.alias_(exp.cast(_column(d), "date"), _ident(METRIC_TIME)))
         else:
@@ -271,7 +336,7 @@ def _mf_document(manifest: dict[str, Any]) -> dict[str, Any]:
     }
     return {
         "semantic_models": manifest.get("semantic_models") or [],
-        "metrics": manifest.get("metrics") or [],
+        "metrics": [m for m in manifest.get("metrics") or [] if m.get("type") != "program"],
         "project_configuration": project,
     }
 
@@ -416,6 +481,16 @@ async def query_metrics(
     from app.modules.static.metricflow_export import export_metricflow
 
     manifest = await export_metricflow(session, user)
+    from app.modules.static.metric_program import query_programs
+    program = await query_programs(session, user, manifest, metrics, group_by=group_by, where=where, limit=limit)
+    if program is not None:
+        return program
+    from app.modules.governance.policy import enforce
+    from app.modules.static.lineage import identity
+    ids = {m["name"]: m.get("config", {}).get("meta", {}).get("rengu", {}).get("id")
+           for m in manifest.get("metrics", [])}
+    await enforce(session, user, [identity("metric", ids[m]) for m in metrics if ids.get(m)],
+                  "aggregate", unmasked=True)
     compiled = compile_metrics(manifest, metrics, group_by, where, limit=limit, backend=backend)
     result = await run_guarded(await session.connection(), compiled.sql, user, session=session)
     columns = list(result.keys())

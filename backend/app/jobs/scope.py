@@ -22,7 +22,14 @@ def scoped_sessions(ontology_id: int):
         async with get_sessionmaker()() as session:
             session.info["workspace_worker"] = True
             await set_ontology_scope(session, ontology_id)
-            yield session
+            from app.modules.governance.query_guard import request_session
+            context = {"session": session, "active": True}
+            token = request_session.set(context)
+            try:
+                yield session
+            finally:
+                context["active"] = False
+                request_session.reset(token)
 
     return session_scope
 

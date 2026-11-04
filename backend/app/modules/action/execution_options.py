@@ -2,6 +2,7 @@
 
 from sqlalchemy import select
 
+from app.common.ontology import require_ontology_id
 from app.core.errors import AppError
 from app.modules.action.models import TypeStatus
 from app.modules.event.models import EventType
@@ -12,38 +13,54 @@ from app.modules.integration.models import ExtSystem
 from app.modules.static.models import LinkType, ObjectStatus, ObjectType
 
 
-async def action_operation_objects(session, definition):
+async def action_operation_objects(session, definition, *, cache=None):
     """Objects on which this explicit published action may be granted; grants remain separate."""
+    async def resolve(kind, identity):
+        key = None
+        if cache is not None and isinstance(identity, str):
+            key = (
+                id(session), require_ontology_id(session), session.sync_session.get_transaction(),
+                id(session.info.get("governance_user")), kind, identity,
+            )
+            if key in cache:
+                return cache[key]
+        if kind == "event":
+            value = await session.scalar(select(EventType).where(
+                EventType.code == identity, EventType.status == TypeStatus.published,
+                EventType.retired_release_id.is_(None),
+            ))
+        else:
+            try:
+                value = await (relation_binding(session, identity) if kind == "relation"
+                               else object_binding(session, identity))
+            except AppError:
+                value = None
+        if key is not None:
+            cache[key] = value
+        return value
+
     found = {}
     identities = [definition.get("targetKind")]
     for edit in definition.get("writeback", {}).get("edits", []):
         if edit.get("op") == "关联":
-            try:
-                _, src, _, dst, _, _ = await relation_binding(session, edit.get("obj"))
+            relation = await resolve("relation", edit.get("obj"))
+            if relation is not None:
+                _, src, _, dst, _, _ = relation
                 found[src.code], found[dst.code] = src, dst
-            except AppError:
-                continue
         else:
             identities.append(edit.get("obj"))
     for effect in definition.get("writeback", {}).get("effects", []):
         if effect.get("kind") == "事件":
-            event = await session.scalar(
-                select(EventType).where(
-                    EventType.code == effect.get("target"),
-                    EventType.status == TypeStatus.published,
-                    EventType.retired_release_id.is_(None),
-                )
-            )
+            event = await resolve("event", effect.get("target"))
             if event is not None:
                 identities.append(event.obj_kind)
     for identity in identities:
         if not identity:
             continue
-        try:
-            obj, _ = await object_binding(session, identity)
+        binding = await resolve("object", identity)
+        if binding is not None:
+            obj, _ = binding
             found[obj.code] = obj
-        except AppError:
-            continue
     return list(found.values())
 
 

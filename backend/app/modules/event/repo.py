@@ -70,11 +70,20 @@ class EventRepo(BaseRepository[Event]):
             .join(EventType, EventType.id == Event.event_type_id)
             .where(Event.code == code)
         )
+        stmt = await self._governed(stmt)
         row = (await self.session.execute(stmt)).first()
         return (row[0], row[1]) if row else None
 
-    @staticmethod
-    def _filter(
+    async def _governed(self, statement):
+        from app.modules.governance.dynamic_guard import context
+        user = self.session.info.get("governance_user")
+        if await context(self.session, user) is not None:
+            from app.modules.event.exceptions import visible_events
+            statement = statement.where(await visible_events(self.session, user))
+        return statement
+
+    async def _filter(
+        self,
         type_id: int, since: datetime | None, outcome: EventOutcome | None, until: datetime | None = None
     ) -> Select[tuple[Event]]:
         stmt = select(Event).where(Event.event_type_id == type_id, Event.is_test.is_(False))
@@ -84,7 +93,7 @@ class EventRepo(BaseRepository[Event]):
             stmt = stmt.where(Event.occurred_at <= until)
         if outcome is not None:
             stmt = stmt.where(Event.outcome == outcome)
-        return stmt.order_by(Event.occurred_at.desc(), Event.id.desc())
+        return (await self._governed(stmt)).order_by(Event.occurred_at.desc(), Event.id.desc())
 
     async def count(
         self,
@@ -93,7 +102,7 @@ class EventRepo(BaseRepository[Event]):
         outcome: EventOutcome | None,
         until: datetime | None = None,
     ) -> int:
-        stmt = self._filter(type_id, since, outcome, until).order_by(None)
+        stmt = (await self._filter(type_id, since, outcome, until)).order_by(None)
         return int(await self.session.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
 
     async def page(
@@ -106,7 +115,7 @@ class EventRepo(BaseRepository[Event]):
         until: datetime | None = None,
     ) -> Sequence[Event]:
         stmt = (
-            self._filter(type_id, since, outcome, until)
+            (await self._filter(type_id, since, outcome, until))
             .options(*self.summary_options())
             .offset(offset)
             .limit(limit)
@@ -116,14 +125,14 @@ class EventRepo(BaseRepository[Event]):
     async def outcome_counts(
         self, type_id: int, since: datetime | None = None, until: datetime | None = None
     ) -> dict[EventOutcome, int]:
-        rows = self._filter(type_id, since, None, until).order_by(None).subquery()
+        rows = (await self._filter(type_id, since, None, until)).order_by(None).subquery()
         stmt = select(rows.c.outcome, func.count()).group_by(rows.c.outcome)
         return {o: int(n) for o, n in (await self.session.execute(stmt)).all()}
 
     async def latencies(
         self, type_id: int, since: datetime | None = None, until: datetime | None = None
     ) -> list[int]:
-        rows = self._filter(type_id, since, None, until).order_by(None).subquery()
+        rows = (await self._filter(type_id, since, None, until)).order_by(None).subquery()
         stmt = (
             select(rows.c.latency_ms)
             .where(rows.c.latency_ms.is_not(None), rows.c.outcome != EventOutcome.pending)
@@ -134,7 +143,7 @@ class EventRepo(BaseRepository[Event]):
     async def daily(self, type_id: int, start: date, end: date, until: datetime) -> dict[date, int]:
         zone = get_settings().display_tz
         since = datetime.combine(start, time.min, ZoneInfo(zone))
-        rows = self._filter(type_id, since, None, until).order_by(None).subquery()
+        rows = (await self._filter(type_id, since, None, until)).order_by(None).subquery()
         day = func.date(func.timezone(zone, rows.c.occurred_at))
         stmt = select(day, func.count()).where(day <= end).group_by(day)
         return {d: int(v) for d, v in (await self.session.execute(stmt)).all()}

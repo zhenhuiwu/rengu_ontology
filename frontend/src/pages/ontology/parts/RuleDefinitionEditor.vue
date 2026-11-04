@@ -7,7 +7,7 @@ const props = defineProps<{ rule: RuleDef; meta: RuleMetaDto; editable: boolean;
 const emit = defineEmits<{ update: [patch: RuleDefinitionPatch] }>();
 const error = ref('');
 const dialog = reactive({ open: false, index: -1, source: 'object', field: '', metric: '', version: undefined as number | undefined,
-  functionId: '', functionVersion: '', functionArgs: [] as string[], relationId: '', relationField: '',
+  functionId: '', functionVersion: '', functionArgs: [] as string[], functionPath: '', relationId: '', relationField: '',
   period: 'day' as 'day' | 'week', transform: 'value' as 'value' | 'prev' | 'wow', elapsed: 'value', op: '=', value: '' });
 const exprEditing = ref(false), exprInput = ref('');
 watch(() => props.rule.id, () => { dialog.open = false; exprEditing.value = false; error.value = ''; });
@@ -20,6 +20,17 @@ const fieldOptions = computed(() => (dialog.source === 'event' ? event.value?.fi
 const functions = computed(() => [...new Map((props.meta.functions ?? []).map(f => [f.id, { value: f.id, label: `${f.name} · ${f.id}` }])).values()]);
 const functionVersions = computed(() => (props.meta.functions ?? []).filter(f => f.id === dialog.functionId));
 const selectedFunction = computed(() => functionVersions.value.find(f => f.version === dialog.functionVersion));
+const functionOutputs = computed(() => selectedFunction.value?.outputPaths ?? [{ path: [], type: 'unknown', label: '返回值' }]);
+const selectedOutput = computed(() => functionOutputs.value.find(output => JSON.stringify(output.path) === dialog.functionPath));
+const functionValue = computed({
+  get: () => {
+    if (selectedOutput.value?.type !== 'string') return dialog.value;
+    try { const value = JSON.parse(dialog.value); return typeof value === 'string' ? value : dialog.value; } catch { return dialog.value; }
+  },
+  set: (value: string) => { dialog.value = selectedOutput.value?.type === 'string' ? JSON.stringify(value) : value; },
+});
+const comparisonOptions = computed(() => (dialog.source === 'function' && selectedOutput.value && !['integer', 'number', 'unknown'].includes(selectedOutput.value.type)
+  ? ['=', '!='] : ['=', '!=', '<', '>', '≤', '≥']).map(value => ({ value, label: value })));
 const argumentOptions = computed(() => [
   ...(object.value?.fields ?? []).map(f => ({ value: f.expression, label: `对象 · ${f.name}（${f.api}）` })),
   ...(props.rule.trigger.kind === '事件' ? event.value?.fields ?? [] : []).map(f => ({ value: f.expression, label: `事件 · ${f.name}（${f.api}）` })),
@@ -27,16 +38,21 @@ const argumentOptions = computed(() => [
 const relations = computed(() => (props.meta.relations ?? []).filter(r => r.from === props.rule.objKind));
 const selectedRelation = computed(() => relations.value.find(r => r.id === dialog.relationId));
 function parseBoundExpression(expression: string) {
-  const fn = /^rule_fn\(("[^"\\]*"),\s*("[^"\\]*")(?:,\s*(.*))?\)$/.exec(expression);
+  const fn = /^rule_fn\(("[^"\\]*"),\s*("[^"\\]*")(?:,\s*(.*))?\)((?:\["(?:[^"\\]|\\.)*"\])*)$/.exec(expression);
   const relation = /^related\(("[^"\\]*"),\s*("[^"\\]*")\)$/.exec(expression);
   try {
-    if (fn) return { source: 'function', functionId: JSON.parse(fn[1]), functionVersion: JSON.parse(fn[2]), functionArgs: fn[3] ? fn[3].split(',').map(v => v.trim()) : [] };
+    if (fn) return { source: 'function', functionId: JSON.parse(fn[1]), functionVersion: JSON.parse(fn[2]), functionArgs: fn[3] ? fn[3].split(',').map(v => v.trim()) : [], functionPath: JSON.stringify([...fn[4].matchAll(/\[("(?:[^"\\]|\\.)*")\]/g)].map(match => JSON.parse(match[1]))) };
     if (relation) return { source: 'relation', relationId: JSON.parse(relation[1]), relationField: JSON.parse(relation[2]) };
   } catch { /* Unrecognised legacy expression stays editable in the expression box. */ }
   return null;
 }
-function setFunction(id: string) { dialog.functionId = id; dialog.functionVersion = ''; dialog.functionArgs = []; }
-function setFunctionVersion(version: string) { dialog.functionVersion = version; dialog.functionArgs = []; }
+function setFunction(id: string) { dialog.functionId = id; dialog.functionVersion = ''; dialog.functionArgs = []; dialog.functionPath = ''; }
+function setFunctionVersion(version: string) {
+  dialog.functionVersion = version; dialog.functionArgs = [];
+  dialog.functionPath = functionOutputs.value.length === 1 ? JSON.stringify(functionOutputs.value[0].path) : '';
+  dialog.value = selectedOutput.value?.type === 'null' ? 'null' : ''; dialog.op = '=';
+}
+function setFunctionPath(value: string) { dialog.functionPath = value; dialog.value = selectedOutput.value?.type === 'null' ? 'null' : ''; dialog.op = '='; }
 const metrics = computed(() => props.meta.metrics.map(m => ({ value: m.id, label: `${m.name} · ${m.id}` })));
 const metric = computed(() => props.meta.metrics.find(m => m.id === dialog.metric));
 const versions = computed(() => (metric.value?.versions ?? []).flatMap(v => {
@@ -56,7 +72,7 @@ function openCondition(index = -1) {
   const elapsed = /^(hours_since|minutes_since)\((.+)\)$/.exec(expression);
   const field = elapsed?.[2] ?? expression;
   const bound = parseBoundExpression(expression);
-  Object.assign(dialog, { open: true, index, functionId: '', functionVersion: '', functionArgs: [], relationId: '', relationField: '',
+  Object.assign(dialog, { open: true, index, functionId: '', functionVersion: '', functionArgs: [], functionPath: '', relationId: '', relationField: '',
     field, metric: condition?.metric ?? '', version: condition?.metricVer, period: condition?.period ?? 'day',
     transform: condition?.transform ?? 'value', elapsed: elapsed?.[1] ?? 'value', op: condition?.op ?? '=', value: condition?.value ?? '', ...(bound ?? {}), source: condition?.metric ? 'metric' : bound?.source ?? (field.startsWith('event.') ? 'event' : 'object') });
   error.value = '';
@@ -77,7 +93,13 @@ function saveCondition() {
   } else if (dialog.source === 'function') {
     const fn = selectedFunction.value;
     if (!fn || fn.inputs.length !== dialog.functionArgs.length || fn.inputs.some((_, i) => !argumentOptions.value.some(option => option.value === dialog.functionArgs[i]))) { error.value = '请选择固定函数版本并为每个入参选择字段'; return; }
-    condition = { field: fn.name, op: dialog.op, value: dialog.value.trim(), expression: `rule_fn(${[JSON.stringify(fn.id), JSON.stringify(fn.version), ...dialog.functionArgs].join(', ')})` };
+    const output = selectedOutput.value;
+    if (!output) { error.value = '请选择固定版本合同中的标量返回字段；数组索引不能自动推测'; return; }
+    if (!comparisonOptions.value.some(option => option.value === dialog.op)) { error.value = '返回字段类型不支持此比较方式'; return; }
+    if (['number', 'integer'].includes(output.type) && !/^[+-]?\d+(?:\.\d+)?\s*(?:%|小时|分钟|天|元)?$/.test(dialog.value.trim())) { error.value = '该返回字段为数值，请填写明确数值阈值'; return; }
+    if (output.type === 'boolean' && !['true', 'false'].includes(dialog.value)) { error.value = '请选择是或否'; return; }
+    const path = output.path.map(key => `[${JSON.stringify(key)}]`).join('');
+    condition = { field: `${fn.name}${output.path.length ? ` · ${output.label}` : ''}`, op: dialog.op, value: dialog.value.trim(), expression: `rule_fn(${[JSON.stringify(fn.id), JSON.stringify(fn.version), ...dialog.functionArgs].join(', ')})${path}` };
   } else if (dialog.source === 'relation') {
     const relation = selectedRelation.value;
     const prop = relation?.fields.find(f => f.api === dialog.relationField);
@@ -168,6 +190,8 @@ const triggerEnabled = computed(() => props.rule.trigger.kind === '事件' ? pro
         <a-form-item label="已发布函数" required><a-select :value="dialog.functionId || undefined" :options="functions" show-search option-filter-prop="label" placeholder="选择函数" @change="(v: string) => setFunction(v)" /></a-form-item>
         <a-form-item label="固定版本" required><a-select :value="dialog.functionVersion || undefined" :options="functionVersions.map(f => ({ value: f.version, label: f.version }))" placeholder="选择真实保存版本" @change="(v: string) => setFunctionVersion(v)" /></a-form-item>
         <a-form-item v-for="(input, i) in selectedFunction?.inputs ?? []" :key="input" :label="`入参 · ${input}`" required><a-select v-model:value="dialog.functionArgs[i]" :options="argumentOptions" show-search option-filter-prop="label" placeholder="选择字段" /></a-form-item>
+        <a-form-item label="返回字段" required><a-select :value="dialog.functionPath || undefined" :disabled="!selectedFunction" :options="functionOutputs.map(output => ({ value: JSON.stringify(output.path), label: `${output.label} · ${output.type}` }))" placeholder="选择固定合同中的标量返回字段" @change="(value: string) => setFunctionPath(value)" /></a-form-item>
+        <a-alert v-if="selectedFunction && !functionOutputs.length" type="warning" message="该版本没有可选的标量返回字段；对象须有明确属性，数组不推测固定下标。" show-icon />
         <p class="t-12 c-3">历史事件回放只能使用保存的事件字段；对象字段使用实时对象。</p>
       </template>
       <template v-else-if="dialog.source === 'relation'">
@@ -179,7 +203,7 @@ const triggerEnabled = computed(() => props.rule.trigger.kind === '事件' ? pro
         <a-form-item label="明确字段" required><a-select v-model:value="dialog.field" :options="fieldOptions" show-search option-filter-prop="label" placeholder="选择真实字段" /></a-form-item>
         <a-form-item label="取值方式"><a-select v-model:value="dialog.elapsed" :options="[{value:'value',label:'字段值'},{value:'hours_since',label:'距该时间的小时数'},{value:'minutes_since',label:'距该时间的分钟数'}]" /></a-form-item>
       </template>
-      <div class="condition-pair"><a-form-item label="比较" required><a-select v-model:value="dialog.op" :options="['=','!=','<','>','≤','≥'].map(value=>({value,label:value}))" /></a-form-item><a-form-item label="比较值" required><a-input v-model:value="dialog.value" :maxlength="500" placeholder="数值、百分比或状态值" /></a-form-item></div>
+      <div class="condition-pair"><a-form-item label="比较" required><a-select v-model:value="dialog.op" :options="comparisonOptions" /></a-form-item><a-form-item label="比较值" required><a-select v-if="dialog.source === 'function' && selectedOutput?.type === 'boolean'" v-model:value="dialog.value" :options="[{value:'true',label:'是'},{value:'false',label:'否'}]" /><a-input v-else-if="dialog.source === 'function' && selectedOutput?.type === 'null'" value="空值" disabled /><a-input v-else-if="dialog.source === 'function'" v-model:value="functionValue" :maxlength="500" :placeholder="selectedOutput?.type === 'string' ? '填写文本' : '填写数值或百分比'" /><a-input v-else v-model:value="dialog.value" :maxlength="500" placeholder="数值、百分比或状态值" /></a-form-item></div>
     </a-form>
   </a-modal>
 </template>

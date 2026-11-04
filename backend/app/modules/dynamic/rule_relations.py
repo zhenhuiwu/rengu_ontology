@@ -20,16 +20,39 @@ async def read_relation_binding(session, identity):
     cache = session.info["rule_relation_read_cache"]
     if identity in cache:
         return cache[identity]
-    links = list(await session.scalars(select(LinkType).where((LinkType.code == identity) | (LinkType.api_name == identity))))
+    oid = require_ontology_id(session)
+    links = list(await session.scalars(select(LinkType).where(
+        LinkType.ontology_id == oid, (LinkType.code == identity) | (LinkType.api_name == identity)
+    )))
+    # Resolve the identity before reading its two endpoints; never prefetch the full runtime catalog.
     if len(links) != 1 or links[0].status != DefStatus.published or links[0].via:
         raise unavailable("关系没有唯一的已发布一跳映射")
     link = links[0]
-    objects = list(await session.scalars(select(ObjectType).where(ObjectType.code.in_({link.from_code, link.to_code}))))
-    by_code = {obj.code: obj for obj in objects if obj.status == ObjectStatus.published}
-    if len(objects) != len({link.from_code, link.to_code}) or set(by_code) != {link.from_code, link.to_code}:
-        raise unavailable("关联两端没有唯一的已发布对象定义")
+    objects = list(await session.scalars(select(ObjectType).where(
+        ObjectType.ontology_id == oid, ObjectType.code.in_({link.from_code, link.to_code})
+    )))
     await ensure_governed_tables(session)
-    bindings = list(governed_tables(require_ontology_id(session), session).values())
+    result = resolve_relation_binding(identity, links, objects, governed_tables(oid, session).values(), oid)
+    cache[identity] = result
+    return result
+
+
+def resolve_relation_binding(identity, links, objects, bindings, ontology_id):
+    """Validate the same scoped definition/FK contract for runtime reads and preloaded metadata."""
+    if not isinstance(identity, str) or not identity or len(identity) > 128:
+        raise unavailable("关系映射标识无效")
+    matches = [link for link in links if identity in (link.code, link.api_name)]
+    if (len(matches) != 1 or matches[0].ontology_id != ontology_id
+            or matches[0].status != DefStatus.published or matches[0].via):
+        raise unavailable("关系没有唯一的已发布一跳映射")
+    link = matches[0]
+    objects = [obj for obj in objects if obj.code in {link.from_code, link.to_code}]
+    by_code = {obj.code: obj for obj in objects if obj.status == ObjectStatus.published}
+    if (len(objects) != len({link.from_code, link.to_code})
+            or set(by_code) != {link.from_code, link.to_code}
+            or any(obj.ontology_id != ontology_id for obj in objects)):
+        raise unavailable("关联两端没有唯一的已发布对象定义")
+    bindings = list(bindings)
     bound = []
     for code in (link.from_code, link.to_code):
         matches = [g for g in bindings if g.object_type == code and not g.inherit]
@@ -49,9 +72,7 @@ async def read_relation_binding(session, identity):
     target = f"{dg.table.name}.{right.name}"
     if not any(f.target_fullname.removeprefix("public.") == target for f in left.foreign_keys):
         raise unavailable("已发布关系与真实数据库外键不一致")
-    result = link, src, sg, dst, dg, left, right
-    cache[identity] = result
-    return result
+    return link, src, sg, dst, dg, left, right
 
 async def bind_rule_relations(session, user, tree, obj, gov, *, source_row=None):
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "related"]

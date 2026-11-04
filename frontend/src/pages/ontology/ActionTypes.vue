@@ -60,7 +60,7 @@ const group = ref('全部');
 const kw = ref('');
 const filtered = computed(() => ACTION_TYPES.filter((a) => (group.value === '全部' || a.group === group.value)
   && (!kw.value || a.name.includes(kw.value))));
-const LPAGE = actionApi.isReal() ? 10 : 22;
+const LPAGE = actionApi.isReal() ? 20 : 22;
 const lpage = ref(1);
 const deleteTick = ref(0);
 watch([group, kw], () => { lpage.value = 1; });
@@ -121,7 +121,12 @@ if (real) watch([actionContextKey, () => cur.value.id, isDraft], async () => {
   catch (e) { if (mounted && key === actionContextKey() && id === cur.value.id) loadErr.value = apiMsg(e); }
 }, { immediate: true, flush: 'sync' });
 const crTarget = () => ({ id: cur.value.id, name: `${cur.value.name}（${cur.value.api}）` });
-const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, writer: crWriter('action', crTarget), ready: () => ready.value, direct: real, readonly, onSaved: async () => { invalidateActionSnapshot(); await loadActionDetail(cur.value.id, true); await loadSnapshot(); } });
+const de = useDraftEdits({ draft, isDraft, editTip: viewTip, targetId: () => cur.value.id, targetName: () => `${cur.value.name}（${cur.value.api}）`, writer: crWriter('action', crTarget), ready: () => ready.value, direct: real, readonly, onSaved: async () => {
+  const key = actionContextKey(), id = cur.value.id;
+  invalidateActionSnapshot();
+  try { await loadActionDetail(id, true); if (mounted && key === actionContextKey()) await loadSnapshot(); }
+  finally { if (mounted && key === actionContextKey()) deleteTick.value++; }
+} });
 /** 放弃草稿（确认卡在 useDraftEdits.discard）：写库模式下删库成功后用 cancel 撤掉本对象在登记表里的登记并切回已发布版；开关关着同以前（mock 登记不动） */
 const onDiscard = () => de.discard(() => { const d = draft.value; if (crWriteOn() && d) cancel(d.id); else setView('published'); });
 /* 刷新后恢复（写库模式）：按库里的草稿登记重新登记本页对象，库里已没有的 mock 登记去掉；本对象的草稿行由 useDraftEdits 读回 */
@@ -224,6 +229,7 @@ const FORMS: Record<SecName, { title: string; fields: () => FieldDef[]; blank: (
 const editor = reactive<{ open: boolean; sec: SecName; key: string | null; form: Record<string, any> }>({ open: false, sec: 'params', key: null, form: {} });
 const editorDef = computed(() => FORMS[editor.sec]);
 const httpMappingEditor = ref<{ validate: () => boolean } | null>(null);
+const databaseWriteback = computed(() => !!writebackSystems().find(s => s.id === editor.form.sysId)?.endpoint.startsWith('database://'));
 const executionEditor = ref<{ validate: () => boolean } | null>(null);
 const paramFunctionEditor = ref<{ validate: () => boolean } | null>(null);
 const parameterComputed = computed(() => { try { return !!JSON.parse(editor.form.def)?.function; } catch { return false; } });
@@ -234,7 +240,8 @@ function openEdit(sec: SecName, key: string) {
   if (row) Object.assign(editor, { open: true, sec, key, form: JSON.parse(JSON.stringify(row.data)) });
 }
 function saveEditor() {
-  if (editor.sec === 'config' && editor.form.sysId && !editor.form.httpEndpointId && !httpMappingEditor.value?.validate()) { message.warning('请完整填写有效的 HTTP 字段映射'); return; }
+  if (editor.sec === 'config' && editor.form.sysId && !databaseWriteback.value && !editor.form.httpEndpointId && !httpMappingEditor.value?.validate()) { message.warning('请完整填写有效的 HTTP 字段映射'); return; }
+  if (editor.sec === 'config' && databaseWriteback.value) Object.assign(editor.form, { httpMapping: null, httpEndpointId: null });
   if (editor.sec === 'config' && !editor.form.sysId) editor.form.httpMapping = null;
   if (real && editor.sec === 'params' && !paramFunctionEditor.value?.validate()) {
     message.warning('请选择有效的计算函数、固定版本和输入参数'); return;
@@ -521,22 +528,22 @@ const deletion = useDefinitionDelete('action', {
     <span v-if="loadErr" class="c-3">动作类型加载失败：{{ loadErr }}</span><a-spin v-else />
   </div>
   <div v-else class="at">
-    <div class="panel at-list">
+    <div class="panel at-list side-list">
       <div class="at-filter">
         <a-input-search v-model:value="kw" placeholder="搜索名称" class="at-kw" />
         <a-select v-model:value="group" :options="groups.map((g) => ({ value: g, label: g === '全部' ? '全部分组' : g }))" class="at-sel" />
       </div>
-      <ul class="at-items">
+      <ul class="at-items side-list-items">
         <a-tooltip v-for="a in list" :key="a.id" placement="right" :mouse-enter-delay="0.4" :title="`${a.api} → ${a.target} · ${a.group}`">
-          <li :class="{ active: a.id === cur.id }" @click="pick(a.id)">
-            <div class="at-row">
-              <span class="t-14 at-name">{{ a.name }}</span>
-              <span class="t-12 num" :class="a.status === '变更中' ? 'c-warning' : 'c-3'">{{ a.status === '已发布' ? '' : a.status + ' · ' }}{{ a.version }}</span>
+          <li class="side-list-item" :class="{ active: a.id === cur.id }" @click="pick(a.id)">
+            <div class="at-row side-list-row">
+              <span class="t-14 at-name side-list-name">{{ a.name }}</span>
+              <span class="t-12 num side-list-meta" :class="a.status === '变更中' ? 'c-warning' : 'c-3'">{{ a.status === '已发布' ? '' : a.status + ' · ' }}{{ a.version }}</span>
             </div>
           </li>
         </a-tooltip>
       </ul>
-      <div class="at-foot">
+      <div class="at-foot side-list-foot">
         <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" unit="个动作" class="at-pager" empty-text="没有匹配的动作类型" />
       </div>
     </div>
@@ -825,7 +832,8 @@ const deletion = useDefinitionDelete('action', {
         <a-textarea v-else-if="f.kind === 'textarea'" v-model:value="editor.form[f.k]" :rows="2" />
         <a-input v-else v-model:value="editor.form[f.k]" :disabled="f.k === 'endpoint' && editor.sec === 'config' && !editor.form.sysId" />
       </a-form-item>
-      <ActionHttpMappingEditor v-if="real && editor.open && editor.sec === 'config' && editor.form.sysId && !editor.form.httpEndpointId" ref="httpMappingEditor" v-model="editor.form.httpMapping" :params="flat(paramSec.rows.value).filter(p => p._mark !== '删除')" />
+      <ActionHttpMappingEditor v-if="real && editor.open && editor.sec === 'config' && editor.form.sysId && !databaseWriteback && !editor.form.httpEndpointId" ref="httpMappingEditor" v-model="editor.form.httpMapping" :params="flat(paramSec.rows.value).filter(p => p._mark !== '删除')" />
+      <p v-if="editor.sec === 'config' && databaseWriteback" class="t-12 c-3">数据库字段映射与独立写账号在外部系统“数据库写回授权”中配置；这里填写逻辑接口说明与幂等键规则。</p>
     </a-form>
     <div class="t-12 c-3">点“保存”立即生效并生成新版本；同一对象的多段改动一次提交。</div>
   </a-modal>
@@ -833,20 +841,15 @@ const deletion = useDefinitionDelete('action', {
 
 <style scoped>
 .at { flex: 1; min-width: 0; min-height: 0; display: flex; gap: var(--gap); }
-.at-list { width: 300px; flex: none; }
+.at-list { flex: none; }
 .at-wait { display: flex; align-items: center; justify-content: center; min-height: 240px; }
 .at-filter { padding: 12px 12px 8px; display: flex; gap: 8px; flex: none; }
 .at-kw { flex: 1; min-width: 0; }
 .at-sel { width: 108px; flex: none; }
-.at-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; overflow: auto; }
-.at-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
-.at-items li:hover { background: var(--g3); }
-.at-items li.active { background: var(--brand-bg); }
-.at-items li.active .at-name { color: var(--brand); }
+.at-items { flex: 1; min-height: 0; }
 .at-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .at-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .at-pager { flex: 1; min-height: 0; }
-.at-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; }
 .at-detail { flex: 1; min-width: 0; }
 .at-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
 .at-head :deep(.ant-tag) { margin-inline-end: 0; }

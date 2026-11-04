@@ -55,15 +55,19 @@ def condition_expression(condition):
         if not isinstance(left, str) or not left.strip():
             raise unavailable("属性条件必须选择明确的对象属性表达式，不能从显示名推断")
         tree = parse_expression(left)
-        if not isinstance(tree.body, (ast.Attribute, ast.Call)):
+        from app.modules.functions.output_paths import access
+        if not isinstance(tree.body, (ast.Attribute, ast.Call)) and access(tree.body) is None:
             raise unavailable("条件左值必须是明确属性或受支持函数")
     raw = condition.get("value")
     if not isinstance(raw, str) or not raw.strip() or len(raw) > 500:
         raise unavailable("条件值不能为空或超过500字")
     value, _ = threshold(raw)
+    if not condition.get("metric") and access(tree.body) is not None:
+        from app.modules.functions.output_paths import comparison_value
+        value = comparison_value(raw, value)
     if isinstance(value, float) and not math.isfinite(value):
         raise unavailable("条件数值超过支持范围")
-    if isinstance(value, str) and value in ("true", "false"):
+    if isinstance(value, str) and value in ("true", "false") and not raw.strip().startswith('"'):
         value = value == "true"
     return f"({left} {op} {value!r})"
 

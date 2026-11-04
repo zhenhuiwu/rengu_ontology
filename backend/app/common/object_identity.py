@@ -45,6 +45,9 @@ def row_source(governed):
 
 
 def source_columns(mapping, source):
+    # Physical sources may explicitly authorize expressions as well as real columns.
+    if source is mapping.table:
+        return dict(mapping.columns)
     return {
         name: source.c[column.name]
         for name, column in mapping.columns.items()

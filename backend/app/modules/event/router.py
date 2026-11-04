@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Body, Depends, Path, Query
+from fastapi import APIRouter, Body, Depends, Path, Query, Response
 
 from app.common.auth import CurrentUserDep, require_func
 from app.common.context import ViewContextDep
@@ -222,10 +222,13 @@ async def list_events(
     type_id: EventPathId,
     session: SessionDep,
     page: Annotated[PageParams, Depends(_event_page)],
+    response: Response,
     range_: Annotated[Literal["24h", "7d"], Query(alias="range", description="24h / 7d（默认）")] = "7d",
     outcome: Annotated[OutcomeQ | None, Query(description="结果（中文）；全部 / 不传 = 不过滤")] = None,
 ) -> EventPageOut:
     rows, total, p = await EventRuntimeService(session).events(type_id, range_, outcome, page)
+    from app.modules.governance.dynamic_guard import notice
+    notice(response, session)
     return EventPageOut(
         items=[EventOut.model_validate(r) for r in rows], total=total, page=p.page, size=p.size
     )

@@ -73,13 +73,13 @@ async function buildPreview() {
 function sourceTable(object: ImportObject) { return preview.value?.tables.find(t => t.name === object.table || `${preview.value?.schema}.${t.name}` === object.table); }
 function primaryOptions(object: ImportObject) {
   const table = sourceTable(object); if (!table) return [];
-  const keys = table.pk.length === 1 ? table.pk : [];
+  const keys = table.kind === 'view' ? table.columns.filter(c => /int|char|text/i.test(c.type)).map(c => c.name) : table.pk.length === 1 ? table.pk : [];
   return object.props.filter(p => keys.includes(p.source)).map(p => ({ value: p.api, label: `${p.name} · ${p.source}` }));
 }
 const validation = computed(() => {
   if (!preview.value) return '请先选择库表并生成真实预览';
   if (releaseLock.value === undefined) return '版本信息尚未加载，请重新预览';
-  if (objects.value.some(o => !primaryOptions(o).some(p => p.value === o.pk))) return '请选择源表真实的单列唯一非空字段作为主键';
+  if (objects.value.some(o => !primaryOptions(o).some(p => p.value === o.pk))) return '请选择真实表主键；视图须显式选择唯一键，后台将验证空值和重复';
   if (objects.value.some(o => !o.titleField || !o.props.some(p => p.api === o.titleField))) return '请选择显示标题属性';
   if (!objects.value.length) return '当前选择未产生对象类型；请调整库表选择';
   if (objects.value.some((o) => !o.name.trim() || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(o.api) || !o.owner || !owners.value.some((u) => u.value === o.owner))) return '请检查对象名称、API名并选择真实负责人';

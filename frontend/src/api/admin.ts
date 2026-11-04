@@ -76,6 +76,9 @@ export async function downloadAuditExport(jobId: string, checkContext: () => voi
 
 /** 页面用的行：后台字段 pendingApprovals 映射成页面原来的 pending */
 export type UserRow = AdminUser & { pending: number; lockVersion?: number };
+export type AccountDetails = Omit<AdminUser, 'role'>;
+export const fetchCurrentAccount = async () =>
+  (await api.get<{ accountDetails: AccountDetails | null }>('/me', { query: { includeAccount: true } })).accountDetails;
 export interface UserForm { name: string; account: string; dept: string; role: string; status: AdminUser['status'] }
 export interface ImportRow { name: string; account: string; dept: string; role: string; error?: string | null }
 export interface UserQuery { dept: string; status: string; kw: string; page: number; size: number }

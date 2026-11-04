@@ -84,6 +84,9 @@ async def http_object_values(session, user, run, definition):
             for p in obj.properties
         ):
             raise AppError("HTTP 映射引用了不可读取的对象属性", code="ACTION_HTTP_MAPPING_INVALID", status_code=422)
+        from app.modules.governance.policy import enforce
+        from app.modules.static.lineage import identity
+        await enforce(session, user, [identity("property", obj.code, field)], "external", unmasked=True)
         value = row[column.name]
         if isinstance(value, Enum):
             value = value.value
@@ -97,7 +100,18 @@ async def http_object_values(session, user, run, definition):
 
 async def preflight(session, user, run, *, review: dict | None = None):
     check_func(user, "action-center", "manage")
+    from app.modules.governance.policy import enforce
+    from app.modules.static.lineage import identity
+    session.info["data_purpose"] = getattr(run, "data_purpose", session.info.get("data_purpose"))
+    await enforce(session, user, [identity("action", run.action_type_code)], "execute")
     definition = await execution_definition(session, run)
+    from app.modules.governance.source_write import preflight as source_write_policy
+    await source_write_policy(session, user, run, definition)
+    if definition.get("sysId"):
+        await enforce(session, user, [identity("action", run.action_type_code),
+            identity("external", definition["sysId"])], "external", unmasked=True)
+        if definition.get("httpEndpointId"):
+            await enforce(session, user, [identity("endpoint", definition["sysId"], definition["httpEndpointId"])], "external", unmasked=True)
     from app.modules.integration.action_edits import resolved_params
 
     run.params = await resolved_params(
@@ -223,9 +237,16 @@ class DatabaseActionSubmitter:
         system = await self.session.scalar(select(ExtSystem).where(ExtSystem.code == run.sys_code))
         if system is None:
             raise AppError("外部系统不存在", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503)
-        adapter = submit_adapter(system, definition)
-        method = submit_method(system, definition)
-        target_url = adapter.url(adapter.path('submit'))
+        if system.endpoint.startswith('database://'):
+            from app.modules.integration.source_database import prepare
+            if definition.get('httpEndpointId') or definition.get('httpMapping'):
+                raise AppError('数据库通道使用独立字段授权，不接受HTTP接口映射', code='SOURCE_WRITE_NOT_AUTHORIZED', status_code=422)
+            database_plan = await prepare(self.session, system, run)
+            method, target_url = 'SQL', database_plan.path
+        else:
+            adapter = submit_adapter(system, definition)
+            method = submit_method(system, definition)
+            target_url = adapter.url(adapter.path('submit'))
         if len(target_url) > 255:
             raise AppError(
                 "真实执行地址超过调用账本长度限制", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503
@@ -296,20 +317,27 @@ async def dispatch_one(call_id, ontology_id: int):
         call = await session.get(WritebackCall, call_id, with_for_update=True)
         if call.msg != QUEUED or run.status != ActionStatus.unknown:
             return
+        database_plan = None
         try:
             user = await resolve_actor(session, call.actor)
             from app.modules.dynamic.rule_dispatch_guard import validate_rule_dispatch
             deadline = await validate_rule_dispatch(session, user, run)
             definition = await preflight(session, user, run)
             system = await session.get(ExtSystem, call.sys_id)
-            adapter = submit_adapter(system, definition)
-            verify = tls_verify()
-            if call.path != adapter.url(adapter.path('submit')) or call.method != submit_method(system, definition) or call.idem_key != run.idem_key:
-                raise Conflict("排队后的执行配置已变更", code="ACTION_DISPATCH_CONFIG_CHANGED")
-            try:
-                secret = resolve_secret(adapter.config.signing_secret)
-            except SigningSecretInvalid as exc:
-                raise AppError("外部执行签名密钥不可用", code=str(exc), status_code=503) from None
+            if system.endpoint.startswith('database://'):
+                from app.modules.integration.source_database import prepare
+                database_plan = await prepare(session, system, run)
+                if call.path != database_plan.path or call.method != 'SQL' or call.idem_key != run.idem_key:
+                    raise Conflict('排队后的数据库授权已变化', code='ACTION_DISPATCH_CONFIG_CHANGED')
+            else:
+                adapter = submit_adapter(system, definition)
+                verify = tls_verify()
+                if call.path != adapter.url(adapter.path('submit')) or call.method != submit_method(system, definition) or call.idem_key != run.idem_key:
+                    raise Conflict("排队后的执行配置已变更", code="ACTION_DISPATCH_CONFIG_CHANGED")
+                try:
+                    secret = resolve_secret(adapter.config.signing_secret)
+                except SigningSecretInvalid as exc:
+                    raise AppError("外部执行签名密钥不可用", code=str(exc), status_code=503) from None
             if deadline is not None and clock.now() >= deadline:
                 raise AppError("规则动作已超过配置有效期，未发送外部请求", code="RULE_ACTION_EXPIRED", status_code=409)
         except AppError as exc:
@@ -343,35 +371,42 @@ async def dispatch_one(call_id, ontology_id: int):
         key = run.idem_key
     started = time.perf_counter()
     status, response_code, result = None, None, None
-    headers = {"Accept": "application/json", "Idempotency-Key": key, "X-Ontology-Id": str(ontology_id)}
-    if system.auth_type != NO_AUTH and adapter.config.token:
-        headers["Authorization"] = f"Bearer {adapter.config.token.get_secret_value()}"
-    # Signed like Webhooks; deliberately no automatic resend here: unknown outcomes go to reconcile_task.
-    body = encode_body(payload)
-    headers = signed_headers(headers, body, secret)
-    try:
-        from app.modules.integration.adapters import pin_http_target
-        pinned_url, host_header, extensions = await pin_http_target(call.path)
-        headers.update(host_header)
-        async with httpx.AsyncClient(
-            timeout=max(0.1, min(system.timeout_ms / 1000, 60)),
-            follow_redirects=False,
-            trust_env=False,
-            verify=verify,
-        ) as client:
-            response = await client.request(call.method, pinned_url, content=body, headers=headers, extensions=extensions)
-        status = response.status_code
-        if not 200 <= status < 300 or len(response.content) > 65_536:
-            raise ValueError
-        from app.modules.integration.http_mapping import response_body
-        result = ExecutionResponse.model_validate(response_body(mapping, response.json()))
-        if result.status == SubmitStatus.SUCCESS and not (result.receipt_id and result.receipt_id.strip()):
-            raise ValueError
-        response_code = result.code
-    except (httpx.HTTPError, ValidationError, ValueError):
-        result = ExecutionResponse(
-            status=SubmitStatus.UNKNOWN, reason="外部调用超时、连接失败或响应无法确认；只对账，不重发业务写入"
-        )
+    if database_plan is not None:
+        from app.modules.integration.source_database import submit as submit_database
+        submitted = await submit_database(database_plan)
+        result = ExecutionResponse(status=submitted.status, receipt_id=submitted.receipt_id,
+                                   reason=submitted.reason, code=submitted.code)
+        response_code = submitted.code
+    else:
+        headers = {"Accept": "application/json", "Idempotency-Key": key, "X-Ontology-Id": str(ontology_id)}
+        if system.auth_type != NO_AUTH and adapter.config.token:
+            headers["Authorization"] = f"Bearer {adapter.config.token.get_secret_value()}"
+        # Signed like Webhooks; deliberately no automatic resend here: unknown outcomes go to reconcile_task.
+        body = encode_body(payload)
+        headers = signed_headers(headers, body, secret)
+        try:
+            from app.modules.integration.adapters import pin_http_target
+            pinned_url, host_header, extensions = await pin_http_target(call.path)
+            headers.update(host_header)
+            async with httpx.AsyncClient(
+                timeout=max(0.1, min(system.timeout_ms / 1000, 60)),
+                follow_redirects=False,
+                trust_env=False,
+                verify=verify,
+            ) as client:
+                response = await client.request(call.method, pinned_url, content=body, headers=headers, extensions=extensions)
+            status = response.status_code
+            if not 200 <= status < 300 or len(response.content) > 65_536:
+                raise ValueError
+            from app.modules.integration.http_mapping import response_body
+            result = ExecutionResponse.model_validate(response_body(mapping, response.json()))
+            if result.status == SubmitStatus.SUCCESS and not (result.receipt_id and result.receipt_id.strip()):
+                raise ValueError
+            response_code = result.code
+        except (httpx.HTTPError, ValidationError, ValueError):
+            result = ExecutionResponse(
+                status=SubmitStatus.UNKNOWN, reason="外部调用超时、连接失败或响应无法确认；只对账，不重发业务写入"
+            )
     elapsed = round((time.perf_counter() - started) * 1000)
     # Remote outcome is retained even when applying local edits/events fails.
     async with sessions() as session, session.begin():
@@ -418,6 +453,20 @@ async def dispatch_one(call_id, ontology_id: int):
             to_manual(task, f"CALLBACK_{exc.code}")
         else:
             resolved(task, outcome.value, "系统")
+
+
+async def dispatch_run(code: str, ontology_id: int):
+    """Immediate confirmation dispatch only; reuse the durable single-call claim/lease."""
+    sessions = scoped_sessions(ontology_id)
+    async with sessions() as session:
+        ids = list(await session.scalars(select(WritebackCall.id).join(
+            ActionRun, ActionRun.id == WritebackCall.action_run_id).where(
+            ActionRun.code == code, WritebackCall.kind == CallKind.write,
+            WritebackCall.msg == QUEUED).limit(2)))
+    if len(ids) > 1:
+        raise AppError('动作对应多条待执行记录，已阻止自动派发', code='ACTION_CALL_AMBIGUOUS', status_code=409)
+    if ids:
+        await dispatch_one(ids[0], ontology_id)
 
 
 async def dispatch_queued(timestamp=0):

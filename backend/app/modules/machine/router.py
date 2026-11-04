@@ -2,7 +2,7 @@
 
 - `POST /machine/objects:query`（objects:read）：复用使用区对象搜索的绑定、筛选和行级范围
   （qa.explore_api 的 Bound.stmt(viewer) = 行级过滤 + 对象读权限）；服务账号按绑定角色的行级范围。
-- `POST /machine/functions/{code}:invoke`（functions:invoke）：复用函数测试运行（runtime.run），
+- `POST /machine/functions/{code}:invoke`（functions:invoke）：共享本地/受控远程计算内核，
   只允许已发布函数。
 - `GET /machine/tools?format=mcp|openai`（meta:read）：能力目录（/meta/capabilities）+ 事件类型
   → 工具 schema。
@@ -21,7 +21,7 @@ from app.core.errors import AppError
 from app.core.schema import _fmt_dt_seconds
 from app.db.session import SessionDep
 from app.modules.admin.api_keys import require_api_scope
-from app.modules.functions import runtime, service
+from app.modules.functions import service
 from app.modules.functions.models import Function
 from app.modules.functions.router import path_code
 from app.modules.functions.schemas import TestIn
@@ -92,9 +92,9 @@ async def objects_query(body: ObjectsQueryIn, session: SessionDep, user: Current
         Depends(require_api_scope("functions:invoke", function_type="{code}")),
         Depends(require_func("functions", "view")),
     ],
-    summary="机器接口：调用已发布函数（同函数测试运行）",
+    summary="机器接口：调用已发布函数（本地或受控远程纯计算）",
 )
-async def function_invoke(code: str, body: TestIn, session: SessionDep) -> dict:
+async def function_invoke(code: str, body: TestIn, session: SessionDep, user: CurrentUserDep) -> dict:
     code = path_code(code)
     status = await session.scalar(select(Function.status).where(Function.code == code))
     if status != "published":
@@ -103,11 +103,19 @@ async def function_invoke(code: str, body: TestIn, session: SessionDep) -> dict:
         )
     fn = await service.detail(session, code)
     start = time.perf_counter()
-    output = runtime.run(fn["code"], fn["name"], body.input, fn["timeoutS"])
+    if body.version:
+        from app.contracts.functions import invoke_version
+        output = await invoke_version(session, user, code, body.version, body.input, strict_local=False)
+    else:
+        from app.common.ontology import require_ontology_id
+        from app.modules.functions.executor import authorize, invoke_snapshot
+        await authorize(session, user, code)
+        output = await invoke_snapshot(fn, body.input, ontology_id=require_ontology_id(session),
+                                       code=code, version=fn["version"])
     return {
         "ok": True,
         "functionId": code,
-        "version": fn["version"],
+        "version": body.version or fn["version"],
         "output": output,
         "ms": max(0, round((time.perf_counter() - start) * 1000)),
         "at": _fmt_dt_seconds(clock.now()),

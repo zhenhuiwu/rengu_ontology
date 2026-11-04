@@ -8,6 +8,7 @@
  * 不依赖 store：当前身份 / 版本 / 预览由 setApiContext 注册的函数提供（src/api/index.ts 里注册），避免和 store 循环引用。
  */
 import { isReal, SWITCH_PREFIX, type ApiPrefix, type SwitchKey } from './config';
+import { ref } from 'vue';
 
 export const API_BASE = '/api';
 
@@ -19,11 +20,24 @@ export interface ApiContext {
   ver?: string | null;
   /** 以此用户预览的用户编号（?previewAs=），null = 不在预览 */
   previewAs?: string | null;
+  dataPurpose?: string | null;
 }
 
 let ctxProvider: () => ApiContext = () => ({});
 export function setApiContext(fn: () => ApiContext) { ctxProvider = fn; }
-export const currentApiContext = (): ApiContext => ctxProvider();
+const purposeEpoch = ref(0);
+const purposeKey = (ctx: ApiContext) => `rg.data-purpose.${ctx.demoAs ?? ''}.${ctx.ontologyId ?? ''}`;
+export const currentApiContext = (): ApiContext => {
+  purposeEpoch.value;
+  const ctx = ctxProvider();
+  return { ...ctx, dataPurpose: sessionStorage.getItem(purposeKey(ctx)) || null };
+};
+export function setDataPurpose(value: string | null) {
+  const key = purposeKey(ctxProvider());
+  if (value) sessionStorage.setItem(key, value); else sessionStorage.removeItem(key);
+  invalidateWorkspaceRequests();
+  purposeEpoch.value++;
+}
 let unauthorizedHandler: (() => void) | undefined;
 export function setUnauthorizedHandler(handler: () => void) { unauthorizedHandler = handler; }
 export function handleUnauthorized(status: number) { if (status === 401) unauthorizedHandler?.(); }
@@ -41,6 +55,8 @@ export async function workspaceFetch(url: string, init: RequestInit = {}, scoped
   const ontologyId = currentApiContext().ontologyId;
   if (scoped && headers.has('X-Ontology-Id') && headers.get('X-Ontology-Id') !== ontologyId) throw new DOMException('本体工作空间已切换', 'AbortError');
   if (scoped && ontologyId) headers.set('X-Ontology-Id', ontologyId);
+  const purpose = currentApiContext().dataPurpose;
+  if (scoped && purpose && !headers.has('X-Data-Purpose')) headers.set('X-Data-Purpose', purpose);
   const epoch = workspaceEpoch, controller = new AbortController();
   const abort = () => controller.abort();
   if (init.signal?.aborted) controller.abort();

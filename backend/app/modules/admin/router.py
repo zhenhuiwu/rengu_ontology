@@ -31,6 +31,7 @@ from app.core.config import api_prefix
 from app.core.schema import DateTimeSec
 from app.db.session import SessionDep
 from app.modules.admin import exports
+from app.modules.governance.router import router as governance_router
 from app.modules.admin.imports import parse_import_xlsx
 from app.modules.admin.models import SysUser
 from app.modules.admin.repo import AuditCursor
@@ -84,7 +85,10 @@ router = APIRouter(tags=["admin"])
 
 
 @router.get("/me", summary="当前真实身份、角色与发布能力")
-async def current_profile(session: SessionDep, user: CurrentUserDep) -> dict:
+async def current_profile(
+    session: SessionDep, user: CurrentUserDep,
+    include_account: Annotated[bool, Query(alias="includeAccount")] = False,
+) -> dict:
     from sqlalchemy import select
 
     from app.modules.admin.models import SysRole
@@ -93,7 +97,7 @@ async def current_profile(session: SessionDep, user: CurrentUserDep) -> dict:
         await session.scalars(select(SysRole.name).where(SysRole.code.in_(user.roles)).order_by(SysRole.code))
     )
     manage = user.func.get("releases") == "manage"
-    return {
+    profile = {
         "id": user.id,
         "name": user.name,
         "roles": list(user.roles),
@@ -101,6 +105,14 @@ async def current_profile(session: SessionDep, user: CurrentUserDep) -> dict:
         "func": user.func,
         "capabilities": {"publish": manage and user.is_ontology_admin, "rollback": manage},
     }
+    if include_account:
+        account = await session.scalar(select(SysUser).where(SysUser.code == user.id))
+        profile["accountDetails"] = (
+            AdminUserOut.model_validate(account).model_dump(
+                mode="json", by_alias=True, exclude={"pending_approvals", "role", "lock_version"}
+            ) if account is not None else None
+        )
+    return profile
 
 
 _audit_view = require_func("audit", "view")
@@ -377,9 +389,13 @@ async def object_role_permissions(
 @router.get(
     "/roles/meta", response_model=RolesMetaOut, summary="页面常量", dependencies=[Depends(_roles_view)]
 )
-async def get_roles_meta(session: SessionDep, user: CurrentUserDep) -> RolesMetaOut:
+async def get_roles_meta(
+    session: SessionDep,
+    user: CurrentUserDep,
+    with_scope_values: Annotated[bool, Query(alias="withScopeValues")] = True,
+) -> RolesMetaOut:
     """对象与范围属性读本体，范围取值遵守当前用户行级过滤；空本体用 mock 兜底。"""
-    return RolesMetaOut.model_validate(await roles_meta(session, user))
+    return RolesMetaOut.model_validate(await roles_meta(session, user, with_scope_values=with_scope_values))
 
 
 @router.get(
@@ -539,3 +555,4 @@ router.include_router(model_settings_router)
 from app.modules.admin.org_scope import router as org_scope_router  # noqa: E402
 
 router.include_router(org_scope_router)
+router.include_router(governance_router)

@@ -41,6 +41,16 @@ def is_writeback_target(s: ExtSystem) -> bool:
     return s.env == PROD and s.status != ExtSystemStatus.disabled
 
 
+async def validate_database_endpoint(session, endpoint):
+    if endpoint.startswith('database://'):
+        from app.modules.data.models import Datasource, DsType
+        source = await session.scalar(select(Datasource).where(
+            Datasource.code == endpoint.removeprefix('database://')))
+        if source is None or source.type not in (DsType.mysql, DsType.dm8):
+            raise AppError('数据库写回须选择当前本体已登记的MySQL或达梦连接',
+                           code='SOURCE_DB_UNAVAILABLE', status_code=422)
+
+
 class ExtSystemService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -129,7 +139,8 @@ class ExtSystemService:
         code = await self._next_code()
         oid = require_ontology_id(self.session)
         obj = ExtSystem(code=code, ontology_id=oid, **_values(body))
-        target = local_demo_selection(oid, code)
+        await validate_database_endpoint(self.session, body.endpoint)
+        target = None if body.endpoint.startswith('database://') else local_demo_selection(oid, code)
         if target and (oid, code) == (target.ontology_id, target.system_code):
             obj.local_only = True
             if not local_demo_matches(obj):
@@ -144,6 +155,7 @@ class ExtSystemService:
         obj = await self.repo.get_by_code_or_404(code)
         await self._check_name(body.name, exclude_id=obj.id)
         values = _values(body)
+        await validate_database_endpoint(self.session, body.endpoint)
         if values["endpoint"] != obj.endpoint:
             if obj.http_endpoints:
                 raise Conflict("请先移除接口目录，再修改系统来源地址")

@@ -101,19 +101,21 @@ export const getMirrorScheduler = () => api.get<{ active: boolean; lastHeartbeat
 
 export interface CdcState {
   phase: 'not_installed' | 'installed' | 'snapshot' | 'catching_up' | 'streaming' | 'paused' | 'reconnecting' | 'failed';
-  enabled: boolean; installed: boolean; captureMode: string; migrationRequired?: boolean;
+  enabled: boolean; installed: boolean; supported: boolean; captureMode: 'trigger' | 'binlog' | 'unavailable'; serverId?: number | null; migrationRequired?: boolean;
   version: number | null; subscriptionVersion: number | null; heartbeatAt: string | null; leaseUntil: string | null; workerActive: boolean;
   pendingAckCount: number; pendingCount: number | null; lastSourceEventAt: string | null; lastObservedAt: string | null; lastAppliedAt: string | null;
   sourcePendingAgeSeconds?: number | null; error: string | null; errorCode: string | null;
+  sourceCommitPosition?: { file: string; position: number; gtid?: string | null } | null;
   recoveryAction: 'install' | 'enable' | 'resume' | 'reinitialize' | null; restartRequired: boolean; sourceGeneration: string | null;
 }
-export interface CdcProbe { supported: boolean; installed?: boolean; captureMode?: string; error?: string | null; errorCode?: string | null; message?: string; requiredPrivileges?: string[]; details?: { error?: string; message?: string; requiredPrivileges?: string[] } }
+export interface CdcProbe { supported: boolean; installed?: boolean; captureMode?: 'trigger' | 'binlog' | 'unavailable'; error?: string | null; errorCode?: string | null; message?: string; requiredPrivileges?: string[]; details?: { error?: string; message?: string; requiredPrivileges?: string[] } }
 export interface CdcPlan { planDigest: string; capture: { schema?: string; table?: string; generation?: string; [key: string]: unknown }; sql: string[] | string; bootstrapFenceSql?: string; bootstrapFenceRequired?: boolean; requiresSourceWrite: boolean }
 const cdcPath = (id: string) => `/external-read-bindings/${encodeURIComponent(id)}/cdc`;
 export const getObjectCdc = (id: string) => api.get<CdcState>(cdcPath(id));
 export const probeObjectCdc = (id: string) => api.post<CdcProbe>(`${cdcPath(id)}/probe`);
-export const planObjectCdc = (id: string, version: number) => api.post<CdcPlan>(`${cdcPath(id)}/plan`, { version });
+export const planObjectCdc = (id: string, version: number, serverId?: number) => api.post<CdcPlan>(`${cdcPath(id)}/plan`, { version, ...(serverId != null ? { serverId } : {}) });
 export const installObjectCdc = (id: string, version: number, planDigest: string) => api.post<CdcState>(`${cdcPath(id)}/install`, { version, planDigest });
 export const enableObjectCdc = (id: string, version: number, reinitialize = false, maxRows?: number) => api.post<CdcState>(`${cdcPath(id)}/enable`, { version, reinitialize, ...(maxRows != null ? { maxRows } : {}) });
 export const pauseObjectCdc = (id: string) => api.post<CdcState>(`${cdcPath(id)}/pause`);
 export const resumeObjectCdc = (id: string, version: number) => api.post<CdcState>(`${cdcPath(id)}/resume`, { version });
+export const consumeObjectCdcOnce = (id: string, version: number) => api.post<CdcState>(`${cdcPath(id)}/consume-once`, { version });

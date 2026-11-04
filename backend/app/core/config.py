@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     # HTTPS enables Secure automatically; HTTP intranets can keep this false.
     auth_cookie_secure: bool = False
     auth_allowed_origins: list[str] = Field(default_factory=list)
+    # 仅开发/内网演示：允许任意 http(s) Origin 登录与写请求，不再维护 IP 白名单。
+    auth_allow_any_origin: bool = False
 
     # seed 数据目录：PDE 的 `npm run export-mock` 输出到 backend/seeds/json/<module>/
     seeds_json_dir: Path = Path(__file__).resolve().parents[2] / "seeds" / "json"

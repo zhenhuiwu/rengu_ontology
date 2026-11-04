@@ -8,20 +8,37 @@ from sqlalchemy import ARRAY, Numeric, String, case, cast, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.auth import CurrentUser
+from app.common.ontology import require_ontology_id
 from app.common.pagination import PageParams
 from app.core.errors import AppError, NotFound, VersionConflict
 from app.core.schema import _fmt_dt
 from app.db.dialects import get_adapter
 from app.modules.admin.models import SysUser
+from app.modules.functions.executor import definition_signature
 from app.modules.functions.models import FnParam, FnVersion, Function
 from app.modules.functions.references import function_uses
-from app.modules.functions.runtime import signature
+from app.modules.functions.remote import resolve
 from app.modules.functions.schemas import CreateIn, RollbackIn, SaveIn
 from app.modules.static.cr_write import CrWriteService
 from app.modules.static.repo import pending_definition_drafts, reserved_target_codes
 from app.modules.static.schemas import CRCreateIn, ItemIn, ItemsPutIn, TargetIn
 
 FIELDS = ("name", "title", "desc", "timeoutS", "code", "inputs", "output", "sampleIn", "sampleOut")
+EXEC_FIELDS = ("runtimeMode", "remote")
+RUNTIMES = {"local": "受限纯计算表达式", "remote_http": "受控远程纯计算"}
+
+
+def execution_fields(body, ontology_id):
+    if body.runtime_mode == "local":
+        return {"runtimeMode": "local", "remote": None}
+    target = resolve(ontology_id, body.remote)
+    if body.timeout_s > target.timeout_s:
+        raise AppError("函数超时不能超过目标部署上限", code="VALIDATION_FAILED", status_code=422)
+    return {"runtimeMode": "remote_http", "remote": {
+        "targetKey": target.key, "revision": target.revision,
+        "inputSchema": target.input_schema, "outputSchema": target.output_schema,
+        "bindingDigest": target.binding_digest(),
+    }}
 
 
 def ver_key(ver: str) -> tuple[int, int, int]:
@@ -70,7 +87,7 @@ def draft_row(code: str, draft: dict) -> dict | None:
         return None
     try:
         parsed = CreateIn.model_validate(draft["definition"])
-        inputs, output = signature(parsed.code, parsed.name)
+        inputs, output = definition_signature({**draft["definition"], "runtimeMode": parsed.runtime_mode})
     except (AppError, ValidationError):
         return None  # Invalid generic CR input stays visible on its CR, never as executable metadata.
     return {
@@ -83,7 +100,9 @@ def draft_row(code: str, draft: dict) -> dict | None:
         "inputs": inputs,
         "output": output,
         "id": code,
-        "runtime": "受限纯计算表达式",
+        "runtime": RUNTIMES[parsed.runtime_mode],
+        "runtimeMode": parsed.runtime_mode,
+        "remote": parsed.remote,
         "version": "草稿",
         "status": "草稿",
         "owner": draft["author"],
@@ -106,6 +125,10 @@ async def current_rows(session: AsyncSession, records, pending: dict) -> list[di
     ):
         params.setdefault(param.function_id, []).append(param)
     uses = await function_uses(session, [fn.code for fn, _, _ in records])
+    snapshots = {(row.function_id, row.ver): row.snapshot for row in await session.scalars(
+        select(FnVersion).where(FnVersion.function_id.in_(ids),
+                               FnVersion.ver.in_([version for _, _, version in records if version]))
+    )}
     result = []
     for fn, owner, version in records:
 
@@ -118,11 +141,14 @@ async def current_rows(session: AsyncSession, records, pending: dict) -> list[di
             }
 
         ps = params.get(fn.id, [])
+        execution = snapshots.get((fn.id, version), {})
         row = {
             "id": fn.code,
             "name": fn.name,
             "title": fn.title,
             "runtime": fn.runtime,
+            "runtimeMode": execution.get("runtimeMode", "local"),
+            "remote": execution.get("remote"),
             "version": version or "",
             "status": {"published": "已发布", "draft": "草稿", "disabled": "已停用"}.get(
                 fn.status, fn.status
@@ -299,8 +325,11 @@ async def save(
         codes.extend(await reserved_target_codes(session, "function"))
         n = max((int(c[3:]) for c in codes if c.startswith("FN-") and c[3:].isdigit()), default=0)
         code = f"FN-{n + 1:03d}"
-    inputs, output = signature(body.code, name)
+    execution = execution_fields(body, require_ontology_id(session))
+    inputs, output = definition_signature({"name": name, "code": body.code, **execution})
     base = {k: current[k] for k in FIELDS} if current else {}
+    if current:
+        base.update({key: current.get(key) for key in EXEC_FIELDS})
     # Signature is inferred from the actual code; keep descriptions for unchanged parameters.
     old_inputs = {p["name"]: p for p in base.get("inputs", [])}
     inputs = [
@@ -318,7 +347,9 @@ async def save(
         "output": {**output, **base.get("output", {}), "type": output["type"]},
         "sampleIn": base.get("sampleIn", {}),
         "sampleOut": base.get("sampleOut"),
+        **execution,
     }
+    value = {"runtimeMode": "local", "remote": None, **value}
     is_new = current is None or bool(current.get("pending", {}).get("isNew"))
     target = TargetIn(kind="function", id=code, is_new=is_new, name=value["title"])
     writer = CrWriteService(session)
@@ -340,7 +371,7 @@ async def save(
         ItemIn(
             key=k, op="add" if is_new else "update", before=base.get(k), after=value[k], type="函数", field=k
         )
-        for k in FIELDS
+        for k in (*FIELDS, *EXEC_FIELDS)
     ]
     items.append(ItemIn(key="_baseLockVersion", op="add", after=baseline, type="函数", field="基线版本"))
     if rollback:
@@ -382,5 +413,7 @@ async def rollback(session: AsyncSession, user: CurrentUser, code: str, body: Ro
         cr_lock_version=body.cr_lock_version,
         change_title=body.change_title or f"回滚函数：{current['title']}"[:40],
         reason=body.reason,
+        runtime_mode=snapshot.get("runtimeMode", "local"),
+        remote=snapshot.get("remote"),
     )
     return await save(session, user, parsed, code, rollback=body.to_version, snapshot=snapshot)

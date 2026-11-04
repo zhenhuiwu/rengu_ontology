@@ -27,6 +27,12 @@ MULTI_SCAN = 10  # 多对象：最多取这么多个对象的摘要
 MULTI_TOP = 3  # 多对象：回答里列有告警的前几个
 DECISION_LIMIT = 5
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_\-]{2,63}")
+_EXPLICIT_ID = re.compile(r"(?<![A-Za-z0-9_])(?:编号|标识|ID)\s*[:：#]?\s*[\"'“]?([A-Za-z0-9][A-Za-z0-9_\-]{0,63})(?![A-Za-z0-9_\-])", re.I)
+
+
+def identity_tokens(question):
+    # Short numeric keys need an identity cue; arbitrary parameter numbers are not targets.
+    return list(dict.fromkeys([*_EXPLICIT_ID.findall(question), *_TOKEN.findall(question)]))
 # “该怎么处理”类说法：通用词，不含任何业务动作名
 _ADVICE_WORDS = (
     "怎么处理",
@@ -96,8 +102,25 @@ def _gov(session: AsyncSession) -> dict[str, Any]:
     }
 
 
-def _label_col(t: Any, public: list[str]) -> Any:
-    return next((t.c[key] for key in ("name", "code") if key in public), t.c["__id"])
+def _label_col(t: Any, public: list[str], title: str | None = None) -> Any:
+    return next((t.c[key] for key in ("name", title, "code") if key and key in public), t.c["__id"])
+
+
+async def _identity_access(session, user, bound, *, filter_keys):
+    from app.modules.qa.explore_api import _governance_access
+    from app.modules.governance.policy import enforce
+    from app.modules.static.lineage import identity
+    from app.core.errors import AppError
+
+    await _governance_access(session, user, bound)
+    primary = [key for key in bound.out if bound.cols[key].compare(bound.id_col)]
+    title = next((key for key in ("name", bound.title, "code") if key and key in bound.out), None)
+    keys = set(primary + ([title] if title else []) + list(filter_keys))
+    decisions = await enforce(session, user, [identity("property", bound.code, k) for k in keys], "read")
+    if any(d["mask"] != "none" for d in decisions.values()):
+        raise AppError("脱敏对象标识不能用于问数目标解析", code="GOVERNANCE_MASK_REQUIRED", status_code=403)
+    await enforce(session, user, [identity("property", bound.code, k) for k in filter_keys],
+                  "filter", unmasked=True)
 
 
 async def _codes_in(session: AsyncSession, values: list[str], user: Any) -> dict[tuple[str, str], str]:
@@ -114,13 +137,16 @@ async def _codes_in(session: AsyncSession, values: list[str], user: Any) -> dict
         _, bound = await _bind(session, g.object_type)
         if bound is None:
             continue
+        await _identity_access(session, user, bound, filter_keys=[k for k in bound.out
+                              if bound.cols[k].compare(bound.id_col) or k == "code"])
+        title = (session.info.get("title_columns") or {}).get(g.object_type)
         visible = (await bound.stmt(user)).subquery()
         columns = [visible.c["__id"]]
         if "code" in bound.out:
             columns.append(visible.c.code)
         async with bound.read(session) as reader:
             rows = await reader.execute(
-                sa.select(visible.c["__id"], _label_col(visible, bound.out))
+                sa.select(visible.c["__id"], _label_col(visible, bound.out, title))
                 .where(sa.or_(*(sa.cast(c, sa.String).in_(values) for c in columns))).limit(MULTI_SCAN)
             )
         for code, label in rows:
@@ -143,7 +169,7 @@ async def _named_objects(
     from app.modules.qa.chain import _strip_suffix, name_suffix
 
     q = re.sub(r"\s", "", question)
-    tokens = list(dict.fromkeys(_TOKEN.findall(question)))[:10]
+    tokens = identity_tokens(question)[:10]
     found = await _codes_in(session, tokens, user)
     from app.common.sql_guard import ensure_governed_tables
 
@@ -163,11 +189,14 @@ async def _named_objects(
         _, bound = await _bind(session, g.object_type)
         if bound is None:
             continue
+        await _identity_access(session, user, bound, filter_keys=[k for k in ("name", bound.title, "code")
+                              if k and k in bound.out])
+        title = (session.info.get("title_columns") or {}).get(g.object_type)
         visible = (await bound.stmt(user)).subquery()
         for hit in hits[:MULTI_SCAN]:
             async with bound.read(session) as reader:
                 rows = (await reader.execute(
-                    sa.select(visible.c["__id"]).where(_label_col(visible, bound.out) == hit).limit(2)
+                    sa.select(visible.c["__id"]).where(_label_col(visible, bound.out, title) == hit).limit(2)
                 )).all()
             if len(rows) == 1:
                 found[(g.object_type, str(rows[0][0]))] = hit
@@ -422,15 +451,26 @@ def requested_action(question: str, proposal: dict[str, Any], objects: list[dict
     """A visible, unambiguous mention wins over a model-selected target; otherwise ask."""
     requested = {**proposal, "params": dict(proposal.get("params") or {})}
     matches = objects
+    if len(matches) > 1 and proposal.get("objKind"):
+        # Generic mentions of other kinds (e.g. the equipment model 驱逐舰) are not
+        # candidate targets for an action bound to one object kind.
+        same_kind = [o for o in matches if o["kind"] == proposal["objKind"]]
+        if len(same_kind) == 1:
+            matches = same_kind
     if len(matches) > 1:
         return requested, "问题包含多个可见目标对象，请明确本次动作的唯一目标编号"
     if matches:
         obj = matches[0]
         requested.update(objKind=obj["kind"], objId=obj["id"], objLabel=obj["label"])
+        # A param extracted from the question as the display name must reach the
+        # business system as the object's identity, not the label.
+        for key, value in (requested.get("params") or {}).items():
+            if isinstance(value, str) and value.strip() == obj["label"]:
+                requested["params"][key] = obj["id"]
     elif proposal.get("objKind"):
-        identity, label = str(proposal.get("objId") or ""), str(proposal.get("objLabel") or "")
-        if not identity or not (identity in _TOKEN.findall(question) or (label and label in question)):
-            return requested, "无法从问题确认唯一授权目标，请明确目标对象编号后重试"
+        identity = str(proposal.get("objId") or "")
+        if not identity or identity not in identity_tokens(question):
+            return requested, "无法从问题确认唯一授权目标，请用对象名称或编号指明目标后重试"
     return requested, None
 
 

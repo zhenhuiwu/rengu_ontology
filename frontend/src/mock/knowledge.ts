@@ -170,7 +170,7 @@ export const KNOWLEDGE: KEntry[] = [
     history: [H('v2026.10.3', 'CR-0007', '王敏', '2026-10-24 21:17', '改为不含税金额冲减', '生效中'), H('v2026.08.2', undefined, '陈立军', '2026-08-12 10:20', '创建')],
   },
   {
-    id: 'K-011', name: '含税与不含税销售额', type: '口径说明', status: '已发布', since: 'v2026.10.3', updatedAt: '2026-10-24 21:17', owner: '王敏',
+    id: 'K-011', name: '含税与不含税销售额', type: '口径说明', status: '已发布', since: 'v2026.10.3', updatedAt: '2026-10-24 21:17', owner: 'admin',
     definition: '“销售额”默认指不含税销售额（gmv）。问题里出现“含税”“实付”时改用含税销售额（gmv_tax）。',
     calc: '不含税 = 含税 / (1 + 税率)，税率按商品税目取', synonyms: ['销售额', 'GMV', '含税销售额'],
     applies: [M('gmv', '销售额（不含税）'), M('gmv_tax', '销售额（含税）')], period: '2026-10-24 起（v2026.10.3）', maps: '指标选择',
@@ -199,7 +199,7 @@ export const KNOWLEDGE: KEntry[] = [
     history: [H('v2026.09.4', 'CR-0003', '吴佳', '2026-09-28 21:30', '创建', '生效中')],
   },
   {
-    id: 'K-014', name: '动销', type: '术语', status: '已发布', since: 'v2026.08.2', updatedAt: '2026-08-12 10:20', owner: '王敏',
+    id: 'K-014', name: '动销', type: '术语', status: '已发布', since: 'v2026.08.2', updatedAt: '2026-08-12 10:20', owner: 'admin',
     definition: '统计期内有销量的商品记为动销。动销率 = 动销 SKU 数 / 在售 SKU 数。',
     calc: '商品.统计期销量 > 0', synonyms: ['动销率', '有销售'], applies: [O('product', '商品'), O('inventory', '库存快照')],
     period: '长期有效', maps: '过滤条件「商品.统计期销量 > 0」', filters: [{ field: '商品.统计期销量', cond: '> 0', note: '' }],
@@ -207,7 +207,7 @@ export const KNOWLEDGE: KEntry[] = [
     history: [H('v2026.08.2', undefined, '王敏', '2026-08-12 10:20', '创建', '生效中')],
   },
   {
-    id: 'K-015', name: '临期商品', type: '业务规则', status: '已发布', since: 'v2026.09.4', updatedAt: '2026-09-28 21:30', owner: '王敏',
+    id: 'K-015', name: '临期商品', type: '业务规则', status: '已发布', since: 'v2026.09.4', updatedAt: '2026-09-28 21:30', owner: 'admin',
     definition: '剩余保质期不足总保质期 1/3 的在库商品；保质期 ≤ 7 天的生鲜按剩余 ≤ 1 天判断。',
     calc: '商品.剩余保质期 ≤ 商品.保质期天数 × 1/3（生鲜：≤ 1 天）', synonyms: ['临期', '近效期'], applies: [O('product', '商品'), O('inventory', '库存快照')],
     period: '长期有效', maps: '过滤条件（库存）', filters: [{ field: '商品.剩余保质期', cond: '≤ 保质期天数 × 1/3', note: '' }],
@@ -301,7 +301,7 @@ export const KNOWLEDGE: KEntry[] = [
     history: [H('v2026.10.4', 'CR-0011', '何静', '2026-10-24 18:40', '新增', '草稿')],
   },
   {
-    id: 'K-025', name: '自营与联营', type: '术语', status: '已发布', since: 'v2026.09.4', updatedAt: '2026-09-28 21:30', owner: '王敏',
+    id: 'K-025', name: '自营与联营', type: '术语', status: '已发布', since: 'v2026.09.4', updatedAt: '2026-09-28 21:30', owner: 'admin',
     definition: '自营：公司采购入库、自负盈亏；联营：品牌方驻场经营、按扣点结算。销售额默认含联营，毛利只算自营。',
     calc: '商品.经营方式 ∈ {自营, 联营}', synonyms: ['自营', '联营', '扣点'], applies: [O('product', '商品'), O('supplier', '供应商'), M('gross_margin', '毛利率')],
     period: '长期有效', maps: '维度「经营方式」', filters: [{ field: '商品.经营方式', cond: '= 自营', note: '只对毛利、毛利率默认加' }],

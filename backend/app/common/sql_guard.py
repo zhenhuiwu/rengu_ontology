@@ -53,7 +53,7 @@ from sqlglot import exp
 from sqlglot.optimizer.scope import traverse_scope
 
 from app.common import ontology as _ontology  # noqa: F401 - registers the RLS after_begin hook first
-from app.core.errors import Forbidden
+from app.core.errors import AppError, Forbidden
 
 DIALECT = "postgres"
 ALLOWED_SCHEMAS = frozenset({"", "public"})
@@ -425,7 +425,7 @@ _BOUND_TTL = 30.0
 _BOUND_VERSION: dict[int, int] = {}
 _BINDING_TABLES = frozenset({
     "object_type", "property", "governed_binding", "external_read_binding",
-    "external_mirror_state", "datasource",
+    "external_mirror_state", "datasource", "link_type",
 })
 
 
@@ -447,6 +447,7 @@ def _invalidate_bound(session, oid: int) -> None:
     session.info["governed_dirty"] = True
     session.info.pop("governed_loaded", None)
     session.info.pop("governed_dynamic", None)
+    session.info.pop("governance_relations", None)
 
 
 def _bound_current(session, oid: int) -> bool:
@@ -478,6 +479,9 @@ def governed_tables(ontology_id: int | None = None, session: Any = None) -> dict
         return {}
     if not _bound_current(session, ontology_id):
         return {}
+    relations = session.info.get("governance_relations")
+    if relations and relations[0] == ontology_id:
+        return dict(relations[1])
     static = _resolve(session.info["governed_binding"][1], ontology_id)
     dynamic = session.info.get("governed_dynamic", {})
     dynamic_objects = session.info.get("governed_dynamic_blocked", set())
@@ -490,6 +494,7 @@ async def load_governed_tables(session: Any, ontology_id: int | None = None) -> 
     if not _valid_ontology(oid) or oid != session.info.get("ontology_id"):
         return {}
     session.info.pop("governed_loaded", None)
+    session.info.pop("governance_relations", None)
     version = _BOUND_VERSION.get(oid, 0)
     rows = await session.execute(_BOUND_SQL, {"ontology_id": oid})
     _store_bound(session, oid, rows.scalars(), version)
@@ -505,7 +510,18 @@ async def load_governed_tables(session: Any, ontology_id: int | None = None) -> 
     dynamic.update(mirrors)
     session.info["governed_dynamic"], session.info["governed_dynamic_blocked"] = dynamic, blocked
     session.info["mirror_gaps"] = gaps
+    titles = await session.execute(
+        text(
+            "SELECT o.code, p.source_column FROM object_type o "
+            "JOIN property p ON p.object_type_id = o.id "
+            "WHERE o.ontology_id = :oid AND p.is_title"
+        ),
+        {"oid": oid},
+    )
+    session.info["title_columns"] = {code: column for code, column in titles.all()}
     session.info["governed_loaded"] = (oid, version)
+    from app.common.relation_resolver import attach_relations
+    await attach_relations(session, oid)
     return governed_tables(oid, session)
 
 
@@ -660,6 +676,14 @@ def scope_expr(g: GovernedTable, scopes: Sequence[dict[str, Any]]) -> dict | Non
                 parts.append(dict(DENY_ALL))
             continue
         # 先查结构（prop 可能是列表等不可哈希的值，不能直接拿去查 field_of_prop）
+        if valid_row_scope(sc) and sc["prop"] not in g.field_of_prop and "." in sc["prop"]:
+            from app.common.relation_resolver import resolve_path
+            try:
+                resolve_path(g.links, sc["prop"])
+                parts.append(from_row_scope(sc))
+            except AppError:
+                parts.append(dict(DENY_ALL))
+            continue
         if not valid_row_scope(sc) or sc["prop"] not in g.field_of_prop:
             parts.append(dict(DENY_ALL))
             continue
@@ -747,6 +771,11 @@ async def row_filters_for(user: Any, session: Any = None) -> dict[str, Predicate
         await ensure_governed_tables(session)
     ontology_id = getattr(user, "ontology_id", None)
     governed = governed_tables(ontology_id, session) if _valid_ontology(ontology_id) else {}
+    if not governed and _valid_ontology(ontology_id):
+        # A concurrent CDC/mirror publish may have bumped the binding version after
+        # ensure_governed_tables ran. Reload once before failing the query.
+        await load_governed_tables(session)
+        governed = governed_tables(ontology_id, session)
     if not governed:
         raise SqlRejected("当前本体工作空间尚未绑定可执行的受控数据源")
     out: dict[str, Predicate | None] = {}
@@ -772,6 +801,8 @@ async def run_guarded(
     bound = governed_tables(getattr(user, "ontology_id", None), session)
     tree = assert_single_select(sql)
     normalize_read_identifiers(tree, bound)
+    from app.modules.governance.query_guard import check_sql
+    await check_sql(session, user, tree, bound)
     for scope in traverse_scope(tree):
         sources = {alias: source for alias, (_, source) in scope.selected_sources.items() if isinstance(source, exp.Table)}
         for alias, source in sources.items():

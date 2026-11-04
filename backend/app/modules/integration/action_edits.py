@@ -282,8 +282,8 @@ async def validate_source_definition(session, source):
         or source["version"] == "current"
     ):
         raise unavailable("函数映射须指定编号、固定发布版本和输入")
+    from app.modules.functions.executor import definition_signature
     from app.modules.functions.models import FnVersion, Function
-    from app.modules.functions.runtime import signature
 
     record = (
         await session.execute(
@@ -305,7 +305,7 @@ async def validate_source_definition(session, source):
         or not isinstance(snapshot.get("name"), str)
     ):
         raise unavailable("函数绑定版本缺少有效源码")
-    inputs, _ = signature(snapshot["code"], snapshot["name"])
+    inputs, _ = definition_signature(snapshot)
     if set(source["inputs"]) != {p["name"] for p in inputs}:
         raise unavailable("函数输入映射与绑定版本不一致")
     for value in source["inputs"].values():
@@ -346,6 +346,9 @@ async def object_binding(session, identity):
 
 
 async def object_operation(session, user, obj, definition):
+    from app.modules.governance.policy import enforce
+    from app.modules.static.lineage import identity
+    await enforce(session, user, [identity("object", obj.code)], "execute", unmasked=True)
     from app.modules.admin.models import SysRole, SysRoleMember, SysUser
     from app.modules.ontology.models import OntologyRoleBinding
 
@@ -560,6 +563,9 @@ async def business_edits(session, user, run, definition, *, apply=False):
         values = {}
         assignment_target = f"new:{run.code}" if edit.get("op") == "新建" else code
         for api, source in assignments.items():
+            from app.modules.governance.policy import enforce
+            from app.modules.static.lineage import identity as resource_identity
+            await enforce(session, user, [resource_identity("property", obj.code, api)], "execute", unmasked=True)
             props = [p for p in obj.properties if p.api_name == api]
             if len(props) != 1:
                 raise unavailable("编辑属性没有唯一的已发布映射")
@@ -637,4 +643,7 @@ async def target_access(session, user, run, definition):
         raise unavailable("动作目标与已发布定义不匹配")
     obj, governed = await object_binding(session, kind)
     await object_operation(session, user, obj, definition)
-    await existing_row(session, user, obj, governed, run.obj_id)
+    # Preflight only proves the target is visible and uniquely resolvable. Local
+    # edits lock the row again in business_edits; external actions never write the
+    # governed table, so a FOR UPDATE here only demands an unnecessary grant.
+    await existing_row(session, user, obj, governed, run.obj_id, lock=False)

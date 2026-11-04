@@ -27,7 +27,7 @@ class DatasourceRepo(BaseRepository[Datasource]):
 
         顺序 = 前端 list：新建的在最前（unshift，后建的更前），seed 的按编号。
         """
-        stmt = self.base_query()
+        stmt = self.base_query().where(Datasource.internal.is_(False))
         if type_ is not None:
             stmt = stmt.where(Datasource.type == type_)
         if kw:

@@ -47,7 +47,7 @@ NOTES = [
     "取数时后台照常按调用者过滤。",
     "敏感属性、隐藏属性不列出。",
     "enum 只出现在声明了取值的参数上：动作参数来自参数规则（枚举列表为元素取值）；"
-    "函数参数来自注解 Literal[...]，调用时不强制。",
+    "本地函数参数注解 Literal[...] 调用时不强制；远程纯计算按固定版本 JSON schema 严格校验。",
 ]
 
 
@@ -178,11 +178,19 @@ def _action_param(p) -> dict:
 
 
 async def _functions(session) -> list[dict]:
+    from app.modules.functions.models import FnVersion
+    from app.modules.functions.service import version_order
+
     fns = list(
         await session.scalars(select(Function).where(Function.status == "published").order_by(Function.name))
     )
     params: dict[int, list[FnParam]] = {}
+    versions = {}
     if fns:
+        for version in await session.scalars(
+            select(FnVersion).where(FnVersion.function_id.in_([f.id for f in fns])).order_by(*version_order())
+        ):
+            versions.setdefault(version.function_id, version)
         for p in await session.scalars(
             select(FnParam)
             .where(FnParam.function_id.in_([f.id for f in fns]))
@@ -206,6 +214,11 @@ async def _functions(session) -> list[dict]:
             "name": f.name,
             "title": f.title,
             "runtime": f.runtime,
+            "version": versions[f.id].ver if f.id in versions else None,
+            "inputSchema": (versions[f.id].snapshot.get("remote") or {}).get("inputSchema")
+            if f.id in versions else None,
+            "outputSchema": (versions[f.id].snapshot.get("remote") or {}).get("outputSchema")
+            if f.id in versions else None,
             "description": f.description,
             "inputs": [shape(p) for p in params.get(f.id, []) if p.direction == "in"],
             "outputs": [shape(p) for p in params.get(f.id, []) if p.direction == "out"],
@@ -398,4 +411,5 @@ async def capabilities(
         for name, page in SECTIONS
         if not allowed[name]
     ]
-    return out
+    from app.modules.governance.catalog import filter_catalog
+    return await filter_catalog(session, user, out)

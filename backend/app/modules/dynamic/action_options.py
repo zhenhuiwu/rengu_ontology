@@ -75,9 +75,13 @@ async def launch_definition(session, user, catalog, code, *, identity=None):
         if system is None:
             raise AppError("外部系统不存在", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503)
         try:
-            submit_adapter(system, definition)  # validates local configuration only
+            if system.endpoint.startswith('database://'):
+                from app.modules.integration.source_database import execution_available
+                await execution_available(session, user, system, definition)
+            else:
+                submit_adapter(system, definition)  # validates local configuration only
         except AppError as exc:
-            if exc.code == "INTEGRATION_TLS_CONFIG_INVALID":
+            if system.endpoint.startswith('database://') or exc.code == "INTEGRATION_TLS_CONFIG_INVALID":
                 raise
             raise AppError(
                 "外部动作执行通道未配置或不可用", code="ACTION_EXECUTOR_UNAVAILABLE", status_code=503

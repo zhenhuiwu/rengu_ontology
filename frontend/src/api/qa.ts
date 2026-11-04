@@ -10,7 +10,7 @@ const api = apiClient('qa');
 /** Freeze identity/history/preview for a multi-await UI operation. */
 export function qaRequestOptions(signal?: AbortSignal): Omit<RequestOptions, 'method' | 'body'> {
   const c = currentApiContext();
-  return { headers: { 'X-Demo-As': c.demoAs ?? '', 'X-Ontology-Id': c.ontologyId ?? '' }, readonlyParams: false, query: { ver: c.ver, previewAs: c.previewAs }, signal };
+  return { headers: { 'X-Demo-As': c.demoAs ?? '', 'X-Ontology-Id': c.ontologyId ?? '', 'X-Data-Purpose': c.dataPurpose ?? '' }, readonlyParams: false, query: { ver: c.ver, previewAs: c.previewAs }, signal };
 }
 export const qaReal = () => api.isReal();
 
@@ -27,6 +27,7 @@ async function download(path: string, query?: Record<string, string>): Promise<R
   if (ctx.previewAs) qs.set('previewAs', ctx.previewAs);
   const headers: Record<string, string> = {};
   if (ctx.ontologyId) headers['X-Ontology-Id'] = ctx.ontologyId;
+  if (ctx.dataPurpose) headers['X-Data-Purpose'] = ctx.dataPurpose;
   const url = `${API_BASE}/${api.prefix}/v1${path}${qs.size ? `?${qs}` : ''}`;
   let res: Response;
   try {
@@ -99,7 +100,7 @@ export const askTurn = (sid: string, question: string, options: Omit<RequestOpti
   api.post<QaAskOut>(`/sessions/${encodeURIComponent(sid)}/turns`, { question, refs: [] }, options);
 /** W7 SSE 事件（qa-api §3.1）；status 只在实时流里有（链路阶段），其余事件带 id、落 qa_turn_event 可续传 */
 export interface QaStreamEvent { id: number | null; event: string; data: any }
-/** 后台不支持流（非 event-stream / 流里没拿到 done）→ 调用方回退 W6 askTurn */
+/** Only a confirmed unsupported route/method may fall back to a new synchronous POST. */
 export class QaStreamUnsupported extends Error {}
 /** 解析 SSE 文本块（id / event / data 多行），不依赖 EventSource（POST + 自定义头） */
 export function parseSseBlock(block: string): QaStreamEvent | null {
@@ -117,48 +118,69 @@ export function parseSseBlock(block: string): QaStreamEvent | null {
 /**
  * W7 流式提问：POST /sessions/{sid}/turns:stream，边收边回调 onEvent，最后返回 done 带的轮次（形状同 W6）。
  * 直接用 fetch 读 ReadableStream（http.ts 的 workspaceFetch 会把整个响应先读完）；头部 / ?ver 规则同 download。
- * 流前错误（404 / 403 / 409）照常抛 ApiError；流里的 error 事件抛 ApiError；拿不到流抛 QaStreamUnsupported。
+ * 仅确定未受理的路由/方法不支持抛 QaStreamUnsupported；网络、协议或已受理流错误绝不重提。
  */
 export async function askTurnStream(sid: string, question: string, onEvent: (e: QaStreamEvent) => void, signal?: AbortSignal): Promise<QaAskOut> {
-  if (!api.isReal()) throw new QaStreamUnsupported('mock');
+  if (!api.isReal()) throw new ApiError(0, { code: 'MOCK_ONLY', message: '问数真实接口未开启' });
   const ctx = currentApiContext();
   const qs = new URLSearchParams();
   if (ctx.ver) qs.set('ver', ctx.ver);
   if (ctx.previewAs) qs.set('previewAs', ctx.previewAs);
   const headers: Record<string, string> = { Accept: 'text/event-stream', 'Content-Type': 'application/json' };
   if (ctx.ontologyId) headers['X-Ontology-Id'] = ctx.ontologyId;
+  if (ctx.dataPurpose) headers['X-Data-Purpose'] = ctx.dataPurpose;
   const url = `${API_BASE}/${api.prefix}/v1/sessions/${encodeURIComponent(sid)}/turns:stream${qs.size ? `?${qs}` : ''}`;
   let res: Response;
   try { res = await fetch(url, { method: 'POST', credentials: 'include', headers, body: JSON.stringify({ question, refs: [] }), signal }); }
-  catch (e) { if ((e as Error)?.name === 'AbortError') throw e; throw new QaStreamUnsupported(String(e)); }
+  catch (e) {
+    if ((e as Error)?.name === 'AbortError') throw e;
+    throw new ApiError(0, { code: 'NETWORK_ERROR', message: '回答连接中断，请刷新会话核对结果；系统未自动重新提问' });
+  }
   handleUnauthorized(res.status);
-  if (res.status === 404 && !(res.headers.get('content-type') ?? '').includes('json')) throw new QaStreamUnsupported('no endpoint');
   if (!res.ok) {
-    let b: Partial<ApiErrorBody> | null = null;
-    try { b = (await res.json()) as Partial<ApiErrorBody>; } catch { /* 非 JSON */ }
+    let b: (Partial<ApiErrorBody> & { detail?: unknown }) | null = null;
+    try { b = (await res.json()) as Partial<ApiErrorBody> & { detail?: unknown }; } catch { /* 非 JSON */ }
     if (res.status === 405 || res.status === 501) throw new QaStreamUnsupported(`HTTP ${res.status}`);
+    // FastAPI's missing route is distinct from the business NOT_FOUND session error.
+    if (res.status === 404 && (b?.detail === 'Not Found' && !b.code && !b.message || b?.code === 'NOT_FOUND' && b.message === 'Not Found')) throw new QaStreamUnsupported('no endpoint');
     throw new ApiError(res.status, { code: typeof b?.code === 'string' ? b.code : `HTTP_${res.status}`, message: String(b?.message ?? res.statusText), details: b?.details, requestId: b?.requestId ?? null });
   }
-  if (!(res.headers.get('content-type') ?? '').startsWith('text/event-stream') || !res.body) throw new QaStreamUnsupported('not sse');
+  if (!(res.headers.get('content-type') ?? '').startsWith('text/event-stream') || !res.body) throw new ApiError(502, { code: 'QA_STREAM_INVALID', message: '回答连接异常，请刷新会话核对结果；系统未自动重新提问' });
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buf = '', done: QaStreamEvent | null = null, failed: QaStreamEvent | null = null;
-  for (;;) {
-    const { value, done: end } = await reader.read();
-    if (value) buf += value.replace(/\r\n/g, '\n');
-    let k: number;
-    while ((k = buf.indexOf('\n\n')) >= 0) {
-      const ev = parseSseBlock(buf.slice(0, k));
-      buf = buf.slice(k + 2);
-      if (!ev) continue;
-      if (ev.event === 'error') failed = ev;
-      if (ev.event === 'done') done = ev;
-      onEvent(ev);
+  const consume = (block: string): QaAskOut | undefined => {
+    const ev = parseSseBlock(block.replace(/\r\n/g, '\n'));
+    if (!ev) return;
+    onEvent(ev);
+    if (ev.event === 'error') throw new ApiError(500, { code: String(ev.data?.code ?? 'INTERNAL_ERROR'), message: String(ev.data?.message ?? '回答失败') });
+    if (ev.event === 'done') {
+      if (!ev.data?.turn) throw new ApiError(502, { code: 'QA_STREAM_INVALID', message: '回答结果不完整，请刷新会话核对结果' });
+      return { turnId: ev.data.turnId, streamUrl: `/api/qa/v1/turns/${ev.data.turnId}/stream`, turn: ev.data.turn as QaRealTurn };
     }
-    if (end) break;
+  };
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done: end } = await reader.read();
+      if (value) buf += value;
+      let separator: RegExpExecArray | null;
+      while ((separator = /\r?\n\r?\n/.exec(buf))) {
+        const block = buf.slice(0, separator.index);
+        buf = buf.slice(separator.index + separator[0].length);
+        const result = consume(block);
+        if (result) return result;
+      }
+      if (end) {
+        // Some proxies close immediately after the final data line without a blank delimiter.
+        const result = consume(buf);
+        if (result) return result;
+        throw new ApiError(502, { code: 'QA_STREAM_INCOMPLETE', message: '回答连接已中断，请刷新会话核对结果；系统未自动重新提问' });
+      }
+    }
+  } finally {
+    // Do not wait for a peer/proxy to close after a terminal event.
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
-  if (failed) throw new ApiError(500, { code: String(failed.data?.code ?? 'INTERNAL_ERROR'), message: String(failed.data?.message ?? '回答失败') });
-  if (!done?.data?.turn) throw new QaStreamUnsupported('no done');
-  return { turnId: done.data.turnId, streamUrl: `/api/qa/v1/turns/${done.data.turnId}/stream`, turn: done.data.turn as QaRealTurn };
 }
 export const listFavorites = (q: { q?: string; page: number; size: number }, options: Omit<RequestOptions, 'method' | 'body'> = {}) => api.get<PageResult<QaFavorite>>('/favorites', { ...options, query: { ...options.query, ...q } });
 export const deleteFavorite = (id: string) => api.delete<void>(`/favorites/${encodeURIComponent(id)}`);
@@ -209,6 +231,7 @@ export const stageTurnAction = (tid: string, body: { objId?: string; objLabel?: 
   api.post<QaActionRun>(`/turns/${encodeURIComponent(tid)}/action:stage`, body, options);
 /** 刷新带 ?confirm=1&run= 的页面时取回已暂存的动作，不再重复暂存 */
 export const getAction = (code: string, options: Omit<RequestOptions, 'method' | 'body'> = {}) => dyn.get<QaActionRun>(`/action-runs/${encodeURIComponent(code)}`, options);
+export const queryActionResult = (code: string, options: Omit<RequestOptions, 'method' | 'body'> = {}) => dyn.post<QaActionRun>(`/action-runs/${encodeURIComponent(code)}:query-result`, undefined, options);
 export const confirmAction = (code: string, options: Omit<RequestOptions, 'method' | 'body'> = {}) => dyn.post<QaActionRun>(`/action-runs/${encodeURIComponent(code)}:confirm`, {}, options);
 export const withdrawAction = (code: string, reason = '确认卡取消', options: Omit<RequestOptions, 'method' | 'body'> = {}) => dyn.post<QaActionRun>(`/action-runs/${encodeURIComponent(code)}:withdraw`, { reason }, options);
 

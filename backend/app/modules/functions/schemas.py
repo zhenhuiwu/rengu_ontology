@@ -1,8 +1,8 @@
 import keyword
 import re
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.core.schema import ApiModel
 from app.modules.functions.runtime import json_value
@@ -26,12 +26,27 @@ class SaveIn(ApiModel):
     title: str = Field(min_length=1, max_length=128)
     desc: str = Field(default="", max_length=8_192)
     timeout_s: int = Field(default=5, ge=1, le=60)
-    code: str = Field(min_length=1, max_length=65_536)
+    code: str = Field(default="", max_length=65_536)
+    runtime_mode: Literal["local", "remote_http"] = "local"
+    remote: dict | None = None
     lock_version: int | None = Field(default=None, ge=1)
     cr_id: str | None = Field(default=None, min_length=1, max_length=64)
     cr_lock_version: int | None = Field(default=None, ge=1)
     change_title: str | None = Field(default=None, min_length=1, max_length=40)
     reason: str = Field(default="", max_length=8_192)
+
+    @model_validator(mode="after")
+    def execution(self):
+        if self.runtime_mode == "local":
+            if not self.code.strip() or self.remote is not None:
+                raise ValueError("本地函数须填写代码，且不能混入远程配置")
+        elif (not isinstance(self.remote, dict) or not isinstance(self.remote.get("targetKey"), str)
+              or not isinstance(self.remote.get("revision"), str)
+              or set(self.remote) - {
+                  "targetKey", "revision", "inputSchema", "outputSchema", "bindingDigest"
+              }):
+            raise ValueError("远程函数须选择获准目标及固定实现修订")
+        return self
 
     @field_validator("title", "desc", "code", "cr_id", "change_title", "reason")
     @classmethod
@@ -75,6 +90,7 @@ class RollbackIn(ApiModel):
 
 class TestIn(ApiModel):
     input: dict[str, Any]
+    version: str | None = Field(default=None, min_length=1, max_length=32)
 
     @field_validator("input")
     @classmethod

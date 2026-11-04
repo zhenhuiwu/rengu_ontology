@@ -5,9 +5,10 @@ import ast
 from sqlalchemy import select
 
 from app.common.auth import check_func
+from app.common.ontology import require_ontology_id
 from app.core.errors import AppError
+from app.modules.functions.executor import authorize, invoke_snapshot
 from app.modules.functions.models import FnVersion, Function
-from app.modules.functions.runtime import json_value, run, signature
 
 
 def typed(value, annotation):
@@ -54,8 +55,9 @@ def typed(value, annotation):
         raise AppError("函数输入或结果不符合绑定版本的类型", code="FUNCTION_TYPE_INVALID", status_code=422)
 
 
-async def invoke_version(session, user, code: str, version: str, inputs: dict):
+async def invoke_version(session, user, code: str, version: str, inputs: dict, *, strict_local=True):
     check_func(user, "functions", "view")
+    await authorize(session, user, code)
     if not isinstance(code, str) or not isinstance(version, str) or not version or version == "current":
         raise AppError("函数调用必须绑定明确的已发布版本", code="FUNCTION_VERSION_REQUIRED", status_code=422)
     record = (
@@ -78,10 +80,5 @@ async def invoke_version(session, user, code: str, version: str, inputs: dict):
         or not 1 <= snapshot["timeoutS"] <= 120
     ):
         raise AppError("函数版本执行配置无效", code="FUNCTION_VERSION_UNAVAILABLE", status_code=409)
-    declared, output = signature(snapshot["code"], snapshot["name"])
-    for field in declared:
-        if field["name"] in inputs:
-            typed(inputs[field["name"]], field["type"])
-    result = json_value(run(snapshot["code"], snapshot["name"], inputs, snapshot["timeoutS"]))
-    typed(result, output["type"])
-    return result
+    return await invoke_snapshot(snapshot, inputs, ontology_id=require_ontology_id(session), code=code,
+                                 version=version, strict_local=strict_local)

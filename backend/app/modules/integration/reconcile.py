@@ -77,7 +77,11 @@ class DatabaseReconcileScheduler:
         task = await self.ensure(run)
         system = await self.session.get(ExtSystem, task.sys_id)
         if system.idempotent:
-            get_adapter(system)  # Missing configuration is a real 503; no round or counter changes.
+            if system.endpoint.startswith('database://'):
+                from app.modules.integration.source_database import query_adapter
+                await query_adapter(self.session, system, run)
+            else:
+                get_adapter(system)  # Missing configuration is a real 503; no round or counter changes.
         task.round += 1
         task.tries = 0
         task.manual = not system.idempotent
@@ -138,16 +142,20 @@ async def process(session, code: str, listener, adapter_factory=get_adapter) -> 
         to_manual(task, "IDEMPOTENCY_QUERY_UNSUPPORTED")
         return task
     try:
-        adapter = adapter_factory(system)
+        if system.endpoint.startswith('database://'):
+            from app.modules.integration.source_database import query_adapter
+            adapter = await query_adapter(session, system, run)
+        else:
+            adapter = adapter_factory(system)
     except AppError as exc:
-        to_manual(task, exc.code)
+        to_manual(task, f'{exc.code}: {exc.message}' if system.endpoint.startswith('database://') else exc.code)
         return task
     started = time.perf_counter()
     result, error = None, None
     try:
         result = await adapter.query_by_key(task.idem_key)
     except AppError as exc:
-        error = exc.code
+        error = f'{exc.code}: {exc.message}' if system.endpoint.startswith('database://') else exc.code
     task.tries += 1  # Only a real query attempt consumes one of the three tries.
     task.last_ext_status = result.ext_status.value if result else None
     task.last_error = error
@@ -160,7 +168,7 @@ async def process(session, code: str, listener, adapter_factory=get_adapter) -> 
             at=clock.now(),
             op_name="幂等查询",
             target_label=run.obj_label or run.code,
-            method="GET",
+            method="SELECT" if system.endpoint.startswith('database://') else "GET",
             path=adapter.path("query"),
             idem_key=task.idem_key,
             elapsed_ms=round((time.perf_counter() - started) * 1000),
@@ -175,7 +183,8 @@ async def process(session, code: str, listener, adapter_factory=get_adapter) -> 
         try:
             async with session.begin_nested():
                 await listener.on_reconciled(
-                    run.code, ReconcileResult(result.ext_status.outcome, result.ext_ref)
+                    run.code, ReconcileResult(result.ext_status.outcome, result.ext_ref,
+                        result.raw if system.endpoint.startswith('database://') else {})
                 )
         except AppError as exc:
             to_manual(task, f"CALLBACK_{exc.code}")

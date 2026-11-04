@@ -87,9 +87,12 @@ async def load_perm_objects(session: AsyncSession) -> list[dict[str, Any]]:
     )
     by_api: dict[str, list[str]] = {}
     action_refs: dict[str, dict[str, dict[str, str]]] = {}
+    binding_cache = {}  # This read-only catalog call alone owns the cache; execution callers keep fresh reads.
     for action in acts:
         apis = {action.target_api}
-        apis.update(obj.api_name for obj in await action_operation_objects(session, action_def(action)))
+        apis.update(obj.api_name for obj in await action_operation_objects(
+            session, action_def(action), cache=binding_cache
+        ))
         for api in apis:
             by_api.setdefault(api, []).append(action.name)
             action_refs.setdefault(api, {})[action.code] = {
@@ -218,12 +221,12 @@ async def load_scope_props(session: AsyncSession, user: CurrentUser) -> list[dic
     return out
 
 
-async def roles_meta(session: AsyncSession, user: CurrentUser) -> dict[str, Any]:
+async def roles_meta(session: AsyncSession, user: CurrentUser, with_scope_values: bool = True) -> dict[str, Any]:
     po = await load_perm_objects(session)
     return {
         "func_pages": func_pages(),
         "perm_objects": po,
-        "scope_props": await load_scope_props(session, user),
+        "scope_props": await load_scope_props(session, user) if with_scope_values else [],
         "obj_actions": {o["name"]: o["actions"] for o in po},
     }
 
@@ -797,8 +800,13 @@ class RoleService:
         target = candidates[0] if len(candidates) == 1 else None
         if target is not None:
             obj_type = target.display_name
-        props = await load_scope_props(self.session, user)
-        meta = next((p for p in props if p["objType"] == obj_type and p["prop"] == prop), None)
+        if "." in prop and target is not None:
+            from app.modules.governance.relation_scopes import values as path_values
+            valid = await path_values(self.session, user, target.code, prop, selected=values)
+            meta = {"values": valid}
+        else:
+            props = await load_scope_props(self.session, user)
+            meta = next((p for p in props if p["objType"] == obj_type and p["prop"] == prop), None)
         if meta is None:
             raise RoleValidation("属性不是权限依据", details={"objType": obj_type, "prop": prop})
         vals = list(dict.fromkeys(values))

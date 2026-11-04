@@ -123,10 +123,13 @@ async def visible_events(session, user):
         if expr is not None:
             query = query.where(to_sql(expr, source_columns(mapping, source), user.attrs, mapping.links))
         scopes.append(and_(Event.is_test.is_(False), Event.obj_kind == mapping.object_type, exists(query)))
-    return and_(Event.ontology_id == user.ontology_id, or_(*scopes))
+    from app.modules.governance.dynamic_guard import context, predicate
+    return and_(Event.ontology_id == user.ontology_id, or_(*scopes), predicate(Event, await context(session, user)))
 
 
 async def authorize(session, user, event, level="view"):
+    from app.modules.governance.dynamic_guard import authorize_record
+    await authorize_record(session, user, Event, event)
     check_func(user, "event-types", level)
     if event.ontology_id != user.ontology_id:
         raise Forbidden("投递记录不属于当前工作空间")

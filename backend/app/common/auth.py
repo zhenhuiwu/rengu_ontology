@@ -86,6 +86,52 @@ def is_admin_request(request: Request) -> bool:
     return actual == prefix or actual.startswith(prefix + "/")
 
 
+def definition_only_request(request: Request) -> bool:
+    """Audited definition readers need membership, not business-table reflection or row grants."""
+    if request.method != "GET" or request.headers.get("authorization") is not None:
+        return False
+    route = full_route_path(request)
+    if route in {
+        api_prefix("admin") + path for path in (
+            "/me", "/governance/my-access", "/depts", "/users/options", "/tenants",
+            "/roles", "/roles/state", "/roles/{role_id}", "/roles/object-permissions",
+            "/settings/tenant", "/settings/models",
+        )
+    }:
+        return True
+    if route in {
+        api_prefix("data") + path for path in (
+            "/datasources", "/datasources/meta", "/datasources/{ds_id}",
+            "/datasources/{ds_id}/tables", "/datasources/{ds_id}/mappings",
+            "/ext-systems", "/ext-systems/{sys_id}", "/ext-systems/{sys_id}/http-endpoints",
+        )
+    }:
+        return True
+    prefix = api_prefix("ontology")
+    if route == prefix + "/change-requests":
+        return request.query_params.get("workflow") == "true"
+    return route in {
+        prefix + path for path in (
+            "/object-types", "/object-types/brief", "/object-types/{id}",
+            "/object-types/{id}/properties", "/object-types/{id}/links", "/object-types/{id}/mappings",
+            "/link-types", "/link-types/{id}", "/link-types/{id}/history",
+            "/link-types/catalog", "/link-types/paths", "/ontology/graph",
+            "/metrics", "/metrics/groups", "/metrics/{id}", "/metrics/{id}/versions",
+            "/functions", "/functions/{code}", "/functions/{code}/versions", "/function-targets",
+            "/action-types", "/action-types/{type_id}", "/action-types/{type_id}/params",
+            "/action-types/{type_id}/submission-criteria", "/action-types/{type_id}/writeback",
+            "/action-types/{type_id}/versions",
+            # Event detail/subscribers mix definitions with permission-filtered runtime counts.
+            "/event-types", "/event-types/{type_id}/payload-fields", "/event-types/{type_id}/versions",
+            "/knowledge", "/knowledge/{id}", "/knowledge/synonym-conflicts",
+            "/dimensions", "/dimensions/{id}", "/dimensions/{id}/values",
+            "/dimensions/{id}/mappings", "/dimensions/{id}/history",
+            "/change-requests/draft-targets",
+            "/workspaces/current", "/releases", "/releases/current",
+        )
+    }
+
+
 async def resolve_user(session: AsyncSession, code: str, tenant_id: str | None = None) -> CurrentUser:
     """用户编号（sys_user.code）→ CurrentUser。查不到 / 停用 → 401。"""
     from app.modules.admin.models import SysUser
@@ -151,6 +197,7 @@ async def bind_workspace(session: AsyncSession, request: Request, user: CurrentU
 
         raise AppError("本体工作空间编号无效", code="VALIDATION_FAILED", status_code=422)
     ontology_id = int(raw) if raw is not None else DEFAULT_ONTOLOGY_ID
+    definition_only = definition_only_request(request)
     workspace = await session.get(OntologyWorkspace, ontology_id)
     if workspace is None or workspace.deleted_at is not None:
         from app.core.errors import NotFound
@@ -183,12 +230,15 @@ async def bind_workspace(session: AsyncSession, request: Request, user: CurrentU
         member, user_code = membership if membership is not None else (None, None)
         if member is None or member.role not in ("owner", "editor", "viewer"):
             raise Forbidden("没有此本体工作空间的访问权限")
-        await set_ontology_scope(session, ontology_id)
+        await set_ontology_scope(session, ontology_id, load_data_bindings=not definition_only)
         user = replace(
             user,
             ontology_id=ontology_id,
             ontology_role=member.role,
-            row_filters=await object_row_access(session, member.user_id, member=member, user_code=user_code),
+            # No data access is granted to a definition-only request; unexpected row reads fail closed.
+            row_filters={} if definition_only else await object_row_access(
+                session, member.user_id, member=member, user_code=user_code
+            ),
         )
     return user
 
@@ -202,8 +252,11 @@ async def get_current_user(
     x_tenant_id: Annotated[str | None, Header(description="一期单租户：只透传，不过滤")] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> CurrentUser:
+    session.info["data_purpose"] = request.headers.get("X-Data-Purpose") or None
     cached = getattr(request.state, "current_user", None)
     if cached is not None:
+        from app.modules.governance.query_guard import bind_request_context
+        bind_request_context(session, cached, request)
         return cached
     if authorization is not None:
         from app.modules.admin.api_keys import authenticate_key
@@ -262,6 +315,8 @@ async def get_current_user(
             ):
                 raise Forbidden("当前本体工作空间为只读权限")
     request.state.current_user = user
+    from app.modules.governance.query_guard import bind_request_context
+    bind_request_context(session, user, request)
     return user
 
 

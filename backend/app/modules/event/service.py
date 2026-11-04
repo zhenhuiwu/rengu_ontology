@@ -110,6 +110,11 @@ class EventTypeService:
     async def detail(self, ctx: ViewContext, type_id: str) -> dict[str, Any]:
         d = await self.one(ctx, type_id)
         weekly = await self.session.scalar(select(EventType.weekly).where(EventType.code == type_id))
+        from app.modules.governance.dynamic_guard import context
+        if await context(self.session, self.session.info.get("governance_user")) is not None:
+            pk, _ = await self.repo.runtime_identity(type_id)
+            until = clock.now()
+            weekly = await EventRepo(self.session).count(pk, until - timedelta(days=7), None, until)
         return {**d, "weekly": weekly or 0, "specific": d.get("payload") or []}
 
     async def payload_fields(self, ctx: ViewContext, type_id: str) -> tuple[list[dict[str, Any]], int]:
@@ -161,6 +166,14 @@ class EventTypeService:
         d = await self.one(ctx, type_id)
         cur = await self.repo.get_by_code(type_id)
         weekly = {s.name: s.weekly for s in cur.subscribers} if cur else {}
+        from app.modules.governance.dynamic_guard import context, read_scope
+        if cur is not None and await context(self.session, self.session.info.get("governance_user")) is not None:
+            from app.modules.event.models import EventDelivery
+            until = clock.now()
+            query = select(EventDelivery.subscriber_name, func.count()).join(Event, Event.id == EventDelivery.event_id).where(
+                Event.event_type_id == cur.id, Event.occurred_at >= until - timedelta(days=7), Event.occurred_at <= until).group_by(EventDelivery.subscriber_name)
+            query = await read_scope(self.session, self.session.info.get("governance_user"), query, Event)
+            weekly = dict((await self.session.execute(query)).all())
         return [{**s, "weekly": weekly.get(s["name"], 0)} for s in d.get("subscribers") or []]
 
     async def versions(self, ctx: ViewContext, type_id: str) -> list[dict[str, Any]]:
@@ -237,6 +250,9 @@ class EventRuntimeService:
         """单条事件（事件抽屉，mock eventById）。字段同近期事件列表的一行；不存在 404。"""
         got = await self.repo.get_with_type_code(code)
         if got is None:
+            if self.session.info.get("governance_dynamic_reason"):
+                from app.core.errors import Forbidden
+                raise Forbidden(self.session.info["governance_dynamic_reason"], code="GOVERNANCE_DYNAMIC_DENIED")
             raise NotFound(self.repo.not_found_message, details={"id": code})
         return event_dict(*got)
 

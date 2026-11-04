@@ -37,9 +37,15 @@ SOURCE_DB = {
     "HR 人事库": "达梦 DM8 · Oracle 兼容模式",
 }
 
+SOURCE_NAME = {}
+
 
 def db_of(source: str | None) -> str:
     return (source and SOURCE_DB.get(source)) or "--"
+
+
+def source_name(source: str | None) -> str | None:
+    return SOURCE_NAME.get(source) if source else None
 
 
 def fmt_dt(v: datetime | None, seconds: bool = False) -> str | None:
@@ -91,6 +97,7 @@ def object_brief(o: ObjectType) -> Obj:
     return opt(
         {"key": o.code, "name": o.display_name, "api": o.api_name, "group": o.obj_group},
         source=o.datasource_name,
+        sourceName=source_name(o.datasource_name),
         count=o.record_count,
         owner=o.owner,
         pk=o.pk_property,

@@ -14,6 +14,7 @@ import InfoTip from '@/components/InfoTip.vue';
 import ObjectMappingModal from '@/pages/ontology/parts/ObjectMappingModal.vue';
 import GovernedBindingModal from './GovernedBindingModal.vue';
 import ExternalReadBindingModal from './ExternalReadBindingModal.vue';
+import CdcEventMappingModal from './CdcEventMappingModal.vue';
 import { fetchDatasourceMappings, type DatasourceMapping } from '@/api/objectImport';
 import { useConfirmStore } from '@/stores/confirm';
 import { useAuthStore } from '@/stores/auth';
@@ -28,7 +29,7 @@ import { currentApiContext, isApiError } from '@/api/http';
 import {
   isDataReal, queryDatasources, queryDsTables, queryDsRuns, getDatasource, createDatasource, updateDatasource, deleteDatasource,
   testDatasource, testDatasourceParams, listDatasourceSchemas, refreshDatasourceTables, getObjectMirror, startObjectMirror, cancelObjectMirror, listObjectMirrorRuns, getMirrorScheduler, type MirrorRun, type MirrorState, type DatasourceWrite,
-  getObjectCdc, probeObjectCdc, planObjectCdc, installObjectCdc, enableObjectCdc, pauseObjectCdc, resumeObjectCdc, type CdcState, type CdcProbe, type CdcPlan,
+  getObjectCdc, probeObjectCdc, planObjectCdc, installObjectCdc, enableObjectCdc, pauseObjectCdc, resumeObjectCdc, consumeObjectCdcOnce, type CdcState, type CdcProbe, type CdcPlan,
 } from '@/api/datasources';
 
 const route = useRoute();
@@ -89,15 +90,16 @@ watch(() => q('ds'), (id) => {
   const i = filtered.value.findIndex((d) => d.id === id);
   if (i >= 0) listPage.value = Math.floor(i / LIST_SIZE) + 1;
 }, { immediate: true });
-const tab = computed({ get: () => q('tab') || 'params', set: (v: string) => setQuery({ tab: v === 'params' ? undefined : v }) });
+const tab = computed<string>({
+  get: () => (['params', 'tables', 'sync'].includes(q('tab')) ? q('tab') : 'params'),
+  set: (v: string) => setQuery({ tab: v === 'params' ? undefined : v }),
+});
 const select = (id: string) => setQuery({ ds: id });
 
 const statusBadge = (s: DsStatus) => (s === '异常' ? 'error' : 'default');
 const typeShort: Record<DsType, string> = { PostgreSQL: 'PG', '达梦 DM8': 'DM8', '人大金仓 KingbaseES': 'KES', MySQL: 'MySQL', ERP: 'ERP' };
 
 // ---------- 详情：连接参数 ----------
-const modeText = (d: Datasource) =>
-  d.type === '达梦 DM8' ? `兼容模式：${d.compatMode}` : d.type === '人大金仓 KingbaseES' ? `database_mode：${d.databaseMode}` : d.type === 'ERP' ? d.erpSystem ?? '' : '';
 const jdbc = (d: Datasource) => ({
   PostgreSQL: `jdbc:postgresql://${d.host}:${d.port}/${d.database}`,
   '达梦 DM8': `jdbc:dm://${d.host}:${d.port}${d.database ? `?schema=${encodeURIComponent(d.database)}` : ''}`,
@@ -194,39 +196,49 @@ const cdcProbes = ref<Record<string, CdcProbe>>({});
 const cdcPlan = ref<CdcPlan>(), cdcPlanVersion = ref(0);
 const cdcPhase: Record<string, string> = { not_installed: '未安装捕获', installed: '已安装，待启用', snapshot: '初始同步中', catching_up: '追赶增量', streaming: '持续同步中', paused: '已暂停消费', reconnecting: '正在重连', failed: '同步失败' };
 const cdcCurrent = computed(() => cdcStates.value[cdcDetail.value]);
+const cdcBinlog = computed(() => selected.value?.type === 'MySQL');
+const mysqlServerId = ref(160081);
+const cdcEventMappingOpen = ref(false);
 const cdcObject = computed(() => mirrorObjects.value.find(o => o.objectId === cdcDetail.value));
 const cdcActive = (id: string) => !!cdcStates.value[id]?.enabled;
-async function loadCdc() {
+let cdcSeq = 0, cdcPending = false, pollingDisposed = false;
+async function loadCdc(poll = false) {
+  if ((poll && cdcPending) || pollingDisposed) return;
+  const n = ++cdcSeq;
   const key = contextKey(), ds = selected.value?.id;
-  if (!real.value || selected.value?.type !== '达梦 DM8' || tab.value !== 'sync') return;
-  const objects = mirrorObjects.value;
-  const results = await Promise.allSettled(objects.map(o => getObjectCdc(o.objectId)));
-  if (key !== contextKey() || ds !== selected.value?.id || tab.value !== 'sync') return;
-  const states: Record<string, CdcState> = {}, errors: Record<string, string> = {};
-  results.forEach((r, i) => { const id = objects[i]!.objectId; if (r.status === 'fulfilled') states[id] = r.value; else errors[id] = isApiError(r.reason) ? r.reason.message : 'CDC 状态暂不可用'; });
-  cdcStates.value = states; cdcErrors.value = errors;
+  if (!real.value || !['达梦 DM8', 'MySQL'].includes(selected.value?.type ?? '') || tab.value !== 'sync') { cdcPending = false; return; }
+  cdcPending = true;
+  try {
+    const objects = mirrorObjects.value;
+    const results = await Promise.allSettled(objects.map(o => getObjectCdc(o.objectId)));
+    if (pollingDisposed || n !== cdcSeq || key !== contextKey() || ds !== selected.value?.id || tab.value !== 'sync') return;
+    const states: Record<string, CdcState> = {}, errors: Record<string, string> = {};
+    results.forEach((r, i) => { const id = objects[i]!.objectId; if (r.status === 'fulfilled') states[id] = r.value; else errors[id] = isApiError(r.reason) ? r.reason.message : 'CDC 状态暂不可用'; });
+    cdcStates.value = states; cdcErrors.value = errors;
+  } finally { if (n === cdcSeq) cdcPending = false; }
 }
 watch([contextKey, () => selected.value?.id, tab, mirrorObjects], () => { cdcStates.value = {}; cdcErrors.value = {}; cdcProbes.value = {}; cdcDetail.value = ''; cdcPlan.value = undefined; void loadCdc(); }, { immediate: true });
-const cdcTimer = window.setInterval(() => { void loadCdc(); }, 3000);
+const cdcTimer = window.setInterval(() => { if (!document.hidden) void loadCdc(true); }, 3000);
 onScopeDispose(() => window.clearInterval(cdcTimer));
-function openCdc(id: string) { cdcDetail.value = id; cdcPlan.value = undefined; }
-async function cdcAction(action: 'probe' | 'plan' | 'install' | 'enable' | 'pause' | 'resume' | 'reinitialize') {
+function openCdc(id: string) { cdcDetail.value = id; mysqlServerId.value = cdcStates.value[id]?.serverId ?? 160081; cdcPlan.value = undefined; }
+async function cdcAction(action: 'probe' | 'plan' | 'install' | 'enable' | 'pause' | 'resume' | 'reinitialize' | 'consume') {
   const id = cdcDetail.value, state = cdcStates.value[id], key = contextKey();
-  if (!id || !state || cdcBusy.value || (readonly.value && action !== 'probe')) return;
-  if (['plan', 'enable', 'resume', 'reinitialize'].includes(action) && state.version == null) { message.warning('请先配置读取授权'); return; }
+  if (!id || !state || state.supported !== true || cdcBusy.value || (readonly.value && action !== 'probe')) return;
+  if (['plan', 'enable', 'resume', 'reinitialize', 'consume'].includes(action) && state.version == null) { message.warning('请先配置读取授权'); return; }
   if (action === 'install' && !cdcPlan.value) return;
   if (['install', 'enable', 'pause', 'reinitialize'].includes(action)) {
-    const impact = action === 'install' ? '将在此对象绑定的源表安装事务触发器及专用捕获资源。仅执行下方已预览的 SQL。' : action === 'pause' ? '暂停读取和应用增量，源端触发器继续捕获变更，待处理记录将保留。' : action === 'reinitialize' ? '重新执行初始同步，再应用捕获的增量；同步期间读取结果可能尚未完整。' : '先执行初始同步，再持续应用已捕获的增量。';
-    if (!await useConfirmStore().ask({ title: action === 'install' ? '安装事务触发器 CDC' : action === 'pause' ? '暂停 CDC 消费' : action === 'reinitialize' ? '重新初始化 CDC' : '启用 CDC', target: cdcObject.value?.name || id, fields: action === 'install' ? [{ label: '源表', value: `${cdcPlan.value?.capture.schema || ''}.${cdcPlan.value?.capture.table || ''}` }] : undefined, impact, okText: '确认执行' })) return;
-    if (key !== contextKey() || id !== cdcDetail.value || readonly.value) return;
+    const impact = action === 'install' ? cdcBinlog.value ? '确认复制server-id与授权表；只验证现有binlog，不在源库创建触发器或表。' : '将在此对象绑定的源表安装事务触发器及专用捕获资源。仅执行下方已预览的 SQL。' : action === 'pause' ? cdcBinlog.value ? '暂停消费并保留提交游标；日志保留不足时须重建基线。' : '暂停读取和应用增量，源端触发器继续捕获变更，待处理记录将保留。' : action === 'reinitialize' ? '重新执行初始同步，再应用捕获的增量；同步期间读取结果可能尚未完整。' : '先执行初始同步，再持续应用已捕获的增量。';
+    if (!await useConfirmStore().ask({ title: action === 'install' ? cdcBinlog.value ? '确认 MySQL binlog 订阅' : '安装事务触发器 CDC' : action === 'pause' ? '暂停 CDC 消费' : action === 'reinitialize' ? '重新初始化 CDC' : '启用 CDC', target: cdcObject.value?.name || id, fields: action === 'install' ? [{ label: '源表', value: `${cdcPlan.value?.capture.schema || ''}.${cdcPlan.value?.capture.table || ''}` }] : undefined, impact, okText: '确认执行' })) return;
+    if (key !== contextKey() || id !== cdcDetail.value || readonly.value || cdcStates.value[id]?.supported !== true) return;
   }
   cdcBusy.value = action;
   try {
     if (action === 'probe') { const result = await probeObjectCdc(id); if (key === contextKey() && id === cdcDetail.value) cdcProbes.value[id] = result; }
-    else if (action === 'plan') { const result = await planObjectCdc(id, state.version!); if (key === contextKey() && id === cdcDetail.value) { cdcPlan.value = result; cdcPlanVersion.value = state.version!; } }
+    else if (action === 'plan') { const result = await planObjectCdc(id, state.version!, cdcBinlog.value ? mysqlServerId.value : undefined); if (key === contextKey() && id === cdcDetail.value) { cdcPlan.value = result; cdcPlanVersion.value = state.version!; } }
     else if (action === 'install') { await installObjectCdc(id, cdcPlanVersion.value, cdcPlan.value!.planDigest); if (key === contextKey() && id === cdcDetail.value) cdcPlan.value = undefined; }
     else if (action === 'pause') await pauseObjectCdc(id);
     else if (action === 'resume') await resumeObjectCdc(id, state.version!);
+    else if (action === 'consume') await consumeObjectCdcOnce(id, state.version!);
     else await enableObjectCdc(id, state.version!, action === 'reinitialize', mirrorBatch.value);
     if (key === contextKey()) { await loadCdc(); await loadMirrors(); }
   } catch (e) { if (key === contextKey()) apiFail('CDC 操作', e); } finally { cdcBusy.value = ''; }
@@ -248,27 +260,42 @@ const mirrorErrors = ref<Record<string, string>>({});
 const schedulerState = ref<{ active: boolean; lastHeartbeat: string | null; error: string | null } | null>(null);
 const mirrorBusy = ref('');
 const mirrorBatch = ref(100);
-let mirrorSeq = 0;
-async function loadMirrors() {
+let mirrorSeq = 0, mirrorPending = false;
+async function loadMirrors(poll = false) {
+  if ((poll && mirrorPending) || pollingDisposed) return;
   const n = ++mirrorSeq, key = contextKey(), ds = selected.value?.id;
-  if (!real.value || selected.value?.type !== '达梦 DM8' || tab.value !== 'sync') return;
-  const objects = mirrorObjects.value;
-  const results = await Promise.allSettled(objects.map(m => getObjectMirror(m.objectId)));
-  if (n !== mirrorSeq || key !== contextKey() || ds !== selected.value?.id) return;
-  const states: Record<string, MirrorState> = {}, errors: Record<string, string> = {};
-  results.forEach((result, index) => { const id = objects[index]!.objectId;
-    if (result.status === 'fulfilled') states[id] = result.value;
-    else errors[id] = isApiError(result.reason) ? result.reason.message : '同步状态暂不可用，请刷新重试';
-  });
-  mirrorStates.value = states; mirrorErrors.value = errors;
+  if (!real.value || !['达梦 DM8', 'MySQL'].includes(selected.value?.type ?? '') || tab.value !== 'sync') { mirrorPending = false; return; }
+  mirrorPending = true;
+  try {
+    const objects = mirrorObjects.value;
+    const results = await Promise.allSettled(objects.map(m => getObjectMirror(m.objectId)));
+    if (pollingDisposed || n !== mirrorSeq || key !== contextKey() || ds !== selected.value?.id || tab.value !== 'sync') return;
+    const states: Record<string, MirrorState> = {}, errors: Record<string, string> = {};
+    results.forEach((result, index) => { const id = objects[index]!.objectId;
+      if (result.status === 'fulfilled') states[id] = result.value;
+      else errors[id] = isApiError(result.reason) ? result.reason.message : '同步状态暂不可用，请刷新重试';
+    });
+    mirrorStates.value = states; mirrorErrors.value = errors;
+  } finally { if (n === mirrorSeq) mirrorPending = false; }
 }
 watch([contextKey, () => selected.value?.id, tab, mirrorObjects], () => { mirrorStates.value = {}; mirrorErrors.value = {}; void loadMirrors(); }, { immediate: true });
-async function loadScheduler() { if (!real.value || tab.value !== 'sync') return; try { schedulerState.value = await getMirrorScheduler(); } catch { schedulerState.value = { active: false, lastHeartbeat: null, error: '无法获取调度状态' }; } }
+let schedulerSeq = 0, schedulerPending = false;
+async function loadScheduler(poll = false) {
+  if ((poll && schedulerPending) || pollingDisposed) return;
+  const n = ++schedulerSeq, key = contextKey();
+  if (!real.value || tab.value !== 'sync') { schedulerPending = false; return; }
+  schedulerPending = true;
+  const current = () => !pollingDisposed && n === schedulerSeq && key === contextKey() && tab.value === 'sync';
+  try { const state = await getMirrorScheduler(); if (current()) schedulerState.value = state; }
+  catch { if (current()) schedulerState.value = { active: false, lastHeartbeat: null, error: '无法获取调度状态' }; }
+  finally { if (n === schedulerSeq) schedulerPending = false; }
+}
 watch([contextKey, tab], () => { schedulerState.value = null; void loadScheduler(); }, { immediate: true });
-const schedulerTimer = window.setInterval(() => { void loadScheduler(); }, 10000);
+const schedulerTimer = window.setInterval(() => { if (!document.hidden) void loadScheduler(true); }, 10000);
 onScopeDispose(() => window.clearInterval(schedulerTimer));
-const mirrorTimer = window.setInterval(() => { if (Object.keys(mirrorErrors.value).length || Object.values(cdcStates.value).some(x => x.enabled) || Object.values(mirrorStates.value).some(x => x.status === 'queued' || x.status === 'running')) void loadMirrors(); }, 2500);
+const mirrorTimer = window.setInterval(() => { if (!document.hidden && (Object.keys(mirrorErrors.value).length || Object.values(cdcStates.value).some(x => x.enabled) || Object.values(mirrorStates.value).some(x => x.status === 'queued' || x.status === 'running'))) void loadMirrors(true); }, 2500);
 onScopeDispose(() => window.clearInterval(mirrorTimer));
+onScopeDispose(() => { pollingDisposed = true; ++cdcSeq; ++mirrorSeq; ++schedulerSeq; });
 async function runMirror(id: string) {
   const state = mirrorStates.value[id];
   if (readonly.value || mirrorBusy.value || !state || state.migrationRequired || mirrorActive(state) || cdcActive(id)) return;
@@ -324,7 +351,8 @@ async function testConn(d: Datasource) {
       const listed = list.value.find((item) => item.id === d.id);
       if (listed) Object.assign(listed, stored);
       if (t.ok) {
-        message.success(`连接成功，耗时 ${t.ms} ms`);
+        if (t.msg.includes('库表清单刷新失败')) message.warning(`${t.msg}（连接耗时 ${t.ms} ms）`);
+        else message.success(`连接成功，耗时 ${t.ms} ms${t.msg && t.msg !== '连接成功' ? `；${t.msg}` : ''}`);
         // 后台真连成功后重新读取持久库表清单。
         if (selected.value?.id === d.id) await loadTables();
       } else message.error(connectionFailure(t.msg));
@@ -366,7 +394,7 @@ async function remove(d: Datasource) {
 
 // ---------- 新建 / 编辑（抽屉表单） ----------
 interface Form { name: string; type: DsType; host: string; port: number; database: string; user: string; password: string; compatMode: string; databaseMode: string; erpSystem: string; appId: string; ssl: boolean; owner: string; mode: Datasource['sync']['mode']; cron: string }
-const blank = (): Form => ({ name: '', type: 'PostgreSQL', host: '', port: 5432, database: '', user: '', password: '', compatMode: 'Oracle', databaseMode: 'oracle', erpSystem: ERP_SYSTEMS[0], appId: '', ssl: true, owner: auth.user?.name || auth.user?.account || '', mode: '定时增量', cron: '0 * * * *' });
+const blank = (): Form => ({ name: '', type: 'PostgreSQL', host: '', port: 5432, database: '', user: '', password: '', compatMode: 'Oracle', databaseMode: 'oracle', erpSystem: ERP_SYSTEMS[0], appId: '', ssl: true, owner: auth.user?.name || auth.user?.account || '', mode: '实时（CDC）', cron: '-' });
 const form = reactive<Form>(blank());
 const formInit = ref('');
 const formMode = computed(() => (q('form') === 'new' || q('form') === 'edit' ? q('form') : ''));
@@ -381,7 +409,7 @@ watch([formMode, () => formMode.value === 'edit' ? selected.value?.id : '', cont
   } : blank());
   formInit.value = JSON.stringify(form);
 }, { immediate: true });
-watch(() => form.type, (t, old) => { if (old && form.port === DS_DEFAULT_PORT[old]) form.port = DS_DEFAULT_PORT[t]; if (old && t === '达梦 DM8' && formMode.value === 'new') { form.ssl = false; form.mode = '手动'; form.cron = '-'; } });
+watch(() => form.type, (t, old) => { if (old && form.port === DS_DEFAULT_PORT[old]) form.port = DS_DEFAULT_PORT[t]; if (old && t === '达梦 DM8' && formMode.value === 'new') { form.ssl = false; form.mode = '实时（CDC）'; form.cron = '-'; } });
 watch(() => form.mode, (mode) => { if (form.type === '达梦 DM8' && mode === '定时全量' && (!form.cron || form.cron === '-')) form.cron = '0 * * * *'; });
 const openForm = (m: 'new' | 'edit') => setQuery({ form: m });
 const closeForm = async () => { if (formDirty.value && !(await confirmDiscard())) return; setQuery({ form: undefined }); };
@@ -481,7 +509,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
   </Teleport>
   <div class="cn">
     <!-- 左：数据源列表 -->
-    <div class="panel cn-list">
+    <div class="panel cn-list side-list side-list-wide">
       <div class="panel-head">
         <span class="t-16 fw-600">数据源</span>
         <span class="t-12 c-3">{{ list.filter((d) => d.status === '异常').length }} 个异常</span>
@@ -490,19 +518,19 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
         <a-select v-model:value="type" size="small" class="cn-w140" :options="['全部', ...DS_TYPES].map((v) => ({ value: v, label: v === '全部' ? '全部类型' : v }))" />
         <a-input-search v-model:value="kw" size="small" placeholder="名称 / 主机 / 库名" />
       </div>
-      <div class="cn-items">
+      <div class="cn-items side-list-items">
         <div
-          v-for="d in listPaged.items" :key="d.id" class="cn-item" :class="{ on: selected?.id === d.id }"
+          v-for="d in listPaged.items" :key="d.id" class="cn-item side-list-item" :class="{ on: selected?.id === d.id, active: selected?.id === d.id }"
           @click="onSelect(d.id)"
         >
-          <div class="cn-item-l1" :title="`${d.name}（${d.type}${modeText(d) ? ' · ' + modeText(d) : ''}）· 负责人 ${d.owner} · 最近测试 ${d.lastTest ? d.lastTest.time : '未测试'}`">
+          <div class="cn-item-l1 side-list-row" :title="`${d.name}（${d.type}）· 负责人 ${d.owner} · 最近测试 ${d.lastTest ? d.lastTest.time : '未测试'}`">
             <span class="cn-type t-12">{{ typeShort[d.type] }}</span>
-            <span class="t-14 fw-600 c-1 cn-ellip">{{ d.name }}</span>
+            <span class="t-14 cn-ellip side-list-name">{{ d.name }}</span>
             <a-badge :status="statusBadge(d.status)" :text="d.status" class="cn-badge" />
           </div>
         </div>
       </div>
-      <AppPagination v-model:page="listPage" class="cn-pager" variant="simple" :total="real ? listTotal : filtered.length" :size="LIST_SIZE" unit="个" />
+      <div class="side-list-foot"><AppPagination v-model:page="listPage" variant="simple" :total="real ? listTotal : filtered.length" :size="LIST_SIZE" unit="个" /></div>
     </div>
 
     <!-- 右：详情 -->
@@ -511,7 +539,6 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
         <div class="cn-title">
           <span class="t-20 fw-600 c-1 cn-ellip" :title="selected.name">{{ selected.name }}</span>
           <a-tag>{{ selected.type }}</a-tag>
-          <a-tag v-if="modeText(selected)">{{ modeText(selected) }}</a-tag>
           <a-badge :status="statusBadge(selected.status)" :text="selected.status" />
           <span v-if="selected.lastTest" class="t-14 cn-ellip" :class="selected.lastTest.ok ? 'c-2' : 'tl-failed'" :title="selected.lastTest.ok ? '' : selected.lastTest.msg">
             最近测试 <span class="num">{{ selected.lastTest.time }}</span> · {{ selected.lastTest.ok ? `成功，${selected.lastTest.ms} ms` : selected.lastTest.msg }}
@@ -528,8 +555,9 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
       <a-tabs v-model:activeKey="tab" class="cn-tabs">
         <a-tab-pane key="params" tab="连接参数" />
         <a-tab-pane key="tables" tab="库表" />
-        <a-tab-pane key="sync" tab="同步计划" />
+        <a-tab-pane v-if="real && ['达梦 DM8', 'MySQL'].includes(selected.type)" key="sync" tab="同步计划" />
       </a-tabs>
+      <a-alert v-if="selected.lastTest?.msg.includes('库表清单刷新失败')" type="warning" :message="selected.lastTest.msg" show-icon style="margin: 12px 16px" />
 
       <div v-if="tab === 'params'" class="cn-body">
         <a-descriptions :column="2" bordered size="small" class="cn-desc">
@@ -547,7 +575,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           <a-descriptions-item label="连接池">{{ real ? '—' : '最小 2 · 最大 16 · 空闲 10 分钟回收' }}</a-descriptions-item>
           <a-descriptions-item label="超时">{{ real ? '—' : '连接 10 秒 · 查询 300 秒' }}</a-descriptions-item>
           <a-descriptions-item label="读写">只读（数据接入只查询，不写回源库）</a-descriptions-item>
-          <a-descriptions-item label="网络">{{ real ? '—' : '内网直连 · 白名单 10.12.40.0/24' }}</a-descriptions-item>
+          <a-descriptions-item label="数据同步">平台后台托管，连接页只负责连接、库表和读取授权</a-descriptions-item>
         </a-descriptions>
       </div>
 
@@ -580,24 +608,24 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
       </div>
 
       <div v-else class="cn-body cn-sync">
-        <template v-if="real && selected.type === '达梦 DM8'">
-          <div class="cn-mirror-head"><strong>镜像同步</strong><span class="c-3">定时调度：{{ schedulerState?.active ? '运行中' : '未运行或状态不可用' }}</span><a-button size="small" @click="loadMirrors">刷新状态</a-button></div>
+        <template v-if="real && ['达梦 DM8', 'MySQL'].includes(selected.type)">
+          <div class="cn-mirror-head"><strong>镜像同步</strong><span class="c-3">定时调度：{{ schedulerState?.active ? '运行中' : '未运行或状态不可用' }}</span><a-button size="small" @click="loadMirrors()">刷新状态</a-button></div>
           <div v-if="!mirrorObjects.length" class="c-3">请先导入对象并配置只读列授权。</div>
           <div v-for="obj in mirrorObjects" :key="obj.objectId" class="cn-mirror-row">
             <div class="cn-mirror-summary"><strong>{{ obj.name }}</strong><div class="t-12 c-3">{{ mirrorErrors[obj.objectId] ? '状态暂不可用' : mirrorText(mirrorStates[obj.objectId]) }}<template v-if="mirrorStates[obj.objectId]"> · 已处理 {{ fmtInt(mirrorStates[obj.objectId].processed) }} 行 · 当前镜像 {{ fmtInt(mirrorStates[obj.objectId].currentStored) }} 行</template></div><div v-if="mirrorStates[obj.objectId]?.dataCheckedAt" class="t-12 c-3">源数据核验：{{ mirrorTime(mirrorStates[obj.objectId].dataCheckedAt) }}<span v-if="mirrorStates[obj.objectId]?.dataUpdatedAt"> · 镜像写入：{{ mirrorTime(mirrorStates[obj.objectId].dataUpdatedAt) }}</span></div><div v-if="mirrorNeedsReview(mirrorStates[obj.objectId])" class="t-12">连接、读取授权或源结构已变化，核对后重新同步。</div><div v-if="mirrorStates[obj.objectId]?.migrationRequired || mirrorErrors[obj.objectId] || mirrorStates[obj.objectId]?.error" class="tl-failed t-12">{{ mirrorStates[obj.objectId]?.migrationRequired ? mirrorUpgradeMessage : mirrorErrors[obj.objectId] || mirrorStates[obj.objectId].error }}</div></div>
-            <div class="cn-cdc-summary t-12"><strong>事务触发器 CDC</strong> · {{ cdcErrors[obj.objectId] || (cdcStates[obj.objectId] ? cdcPhase[cdcStates[obj.objectId].phase] || cdcStates[obj.objectId].phase : '状态加载中') }}<template v-if="cdcStates[obj.objectId]?.installed"> · 待处理 {{ cdcStates[obj.objectId].pendingCount ?? '未测得' }} 条 · 最近应用 {{ mirrorTime(cdcStates[obj.objectId].lastAppliedAt) }} · 采集{{ cdcStates[obj.objectId].workerActive ? '运行中' : '未运行' }}</template><div v-if="cdcStates[obj.objectId]?.error" class="tl-failed">{{ cdcStates[obj.objectId].error }}</div></div>
-            <div class="cn-mirror-actions"><a-tooltip title="每批行数；提交后自动读取至本轮完成"><a-input-number v-model:value="mirrorBatch" aria-label="同步批量行数" :min="1" :max="1000" size="small" /></a-tooltip><a-button size="small" :loading="mirrorBusy === obj.objectId && !mirrorActive(mirrorStates[obj.objectId])" :disabled="readonly || !!mirrorBusy || !mirrorStates[obj.objectId] || mirrorStates[obj.objectId]?.migrationRequired || mirrorActive(mirrorStates[obj.objectId]) || cdcActive(obj.objectId)" @click="runMirror(obj.objectId)">{{ mirrorAction(mirrorStates[obj.objectId]) }}</a-button><a-tooltip v-if="mirrorActive(mirrorStates[obj.objectId])" :title="cdcActive(obj.objectId) ? '请在配置 CDC 中暂停消费' : undefined"><a-button size="small" :loading="mirrorBusy === obj.objectId" :disabled="readonly || !!mirrorBusy || cdcActive(obj.objectId)" @click="cancelMirror(obj.objectId)">{{ cdcActive(obj.objectId) ? '请先暂停 CDC' : '取消同步' }}</a-button></a-tooltip><a-button v-if="mirrorNeedsReview(mirrorStates[obj.objectId])" size="small" :disabled="readonly" @click="governedObject = obj.objectId; governedOpen = true">核对读取授权</a-button><a-button size="small" @click="showMirrorHistory(obj.objectId)">全量详情与记录</a-button><a-button size="small" @click="openCdc(obj.objectId)">配置 CDC</a-button></div>
+            <div v-if="selected.type === '达梦 DM8'" class="cn-cdc-summary t-12"><strong>事务触发器 CDC</strong> · {{ cdcErrors[obj.objectId] || (cdcStates[obj.objectId] ? cdcPhase[cdcStates[obj.objectId].phase] || cdcStates[obj.objectId].phase : '状态加载中') }}<template v-if="cdcStates[obj.objectId]?.installed"> · 待处理 {{ cdcStates[obj.objectId].pendingCount ?? '未测得' }} 条 · 最近应用 {{ mirrorTime(cdcStates[obj.objectId].lastAppliedAt) }} · 采集{{ cdcStates[obj.objectId].workerActive ? '运行中' : '未运行' }}</template><div v-if="cdcStates[obj.objectId]?.error" class="tl-failed">{{ cdcStates[obj.objectId].error }}</div></div>
+            <div class="cn-mirror-actions"><a-tooltip title="每批行数；提交后自动读取至本轮完成"><a-input-number v-model:value="mirrorBatch" aria-label="同步批量行数" :min="1" :max="1000" size="small" /></a-tooltip><a-button size="small" :loading="mirrorBusy === obj.objectId && !mirrorActive(mirrorStates[obj.objectId])" :disabled="readonly || !!mirrorBusy || !mirrorStates[obj.objectId] || mirrorStates[obj.objectId]?.migrationRequired || mirrorActive(mirrorStates[obj.objectId]) || cdcActive(obj.objectId)" @click="runMirror(obj.objectId)">{{ mirrorAction(mirrorStates[obj.objectId]) }}</a-button><a-tooltip v-if="mirrorActive(mirrorStates[obj.objectId])" :title="cdcActive(obj.objectId) ? '请在配置 CDC 中暂停消费' : undefined"><a-button size="small" :loading="mirrorBusy === obj.objectId" :disabled="readonly || !!mirrorBusy || cdcActive(obj.objectId)" @click="cancelMirror(obj.objectId)">{{ cdcActive(obj.objectId) ? '请先暂停 CDC' : '取消同步' }}</a-button></a-tooltip><a-button v-if="mirrorNeedsReview(mirrorStates[obj.objectId])" size="small" :disabled="readonly" @click="governedObject = obj.objectId; governedOpen = true">核对读取授权</a-button><a-button size="small" @click="showMirrorHistory(obj.objectId)">全量详情与记录</a-button><a-button v-if="['达梦 DM8', 'MySQL'].includes(selected.type)" size="small" @click="openCdc(obj.objectId)">配置 CDC</a-button></div>
           </div>
-          <p class="t-12 c-3">全量同步与 CDC 可分别配置；CDC 消费运行时请先暂停，再执行同一对象的全量同步。</p>
+          <p class="t-12 c-3">{{ selected.type === '达梦 DM8' ? '全量同步与 CDC 可分别配置；CDC 消费运行时请先暂停，再执行同一对象的全量同步。' : 'MySQL 可配置binlog CDC；未启用CDC时使用显式镜像扫描，视图只支持镜像。' }}</p>
         </template>
         <a-descriptions :column="2" bordered size="small" class="cn-desc">
           <a-descriptions-item label="同步方式">{{ selected.sync.mode }}</a-descriptions-item>
-          <a-descriptions-item v-if="real && selected.type === '达梦 DM8'" label="定时计划">{{ selected.sync.mirrorScheduleEnabled ? (schedulerState?.active ? '已启用' : '已配置，调度服务不可用') : selected.sync.mode === '实时（CDC）' ? 'CDC 按对象单独启用' : selected.sync.mode === '手动' ? '未启用' : '未启用，请重新保存配置' }}</a-descriptions-item>
+          <a-descriptions-item v-if="real && ['达梦 DM8', 'MySQL'].includes(selected.type)" label="定时计划">{{ selected.sync.mirrorScheduleEnabled ? (schedulerState?.active ? '已启用' : '已配置，调度服务不可用') : selected.sync.mode === '实时（CDC）' ? (['达梦 DM8', 'MySQL'].includes(selected.type) ? 'CDC 按对象单独启用；视图仅支持镜像' : '该源 CDC 通道尚未实现，无法启用') : selected.sync.mode === '手动' ? '未启用' : '未启用，请重新保存配置' }}</a-descriptions-item>
           <a-descriptions-item label="频率">{{ selected.sync.cronText }}<span v-if="selected.sync.cron !== '-'" class="num c-3 cn-gap">{{ selected.sync.cron }}</span></a-descriptions-item>
           <a-descriptions-item label="运行时间窗">{{ selected.sync.window }}</a-descriptions-item>
           <a-descriptions-item label="增量字段"><span class="num">{{ selected.sync.cursorField }}</span></a-descriptions-item>
           <a-descriptions-item label="下次计划"><span class="num">{{ selected.sync.nextRun ?? EMPTY }}</span></a-descriptions-item>
-          <a-descriptions-item label="失败重试">{{ real ? '—' : '3 次，间隔 5 分钟；仍失败通知负责人' }}</a-descriptions-item>
+          <a-descriptions-item label="失败重试" :span="real && ['达梦 DM8', 'MySQL'].includes(selected.type) ? 2 : 1">{{ real ? '—' : '3 次，间隔 5 分钟；仍失败通知负责人' }}</a-descriptions-item>
         </a-descriptions>
         <div class="t-14 fw-600 c-1 cn-runs-title">最近同步</div>
         <div v-if="!syncRuns.length" class="c-3 t-12">还没有同步记录</div>
@@ -616,13 +644,15 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
   </div>
 
   <ObjectMappingModal v-if="selected && mappingTable" v-model:open="mappingOpen" :datasource-id="selected.id" :datasource-name="selected.name" :schema="mappingTable.schema" :table="mappingTable.name" :current-object-id="mappedObjects(mappingTable)[0]?.objectId" @saved="loadMappings" />
-  <a-modal :open="!!cdcDetail" title="事务触发器 CDC" :z-index="900" :width="880" :footer="null" :closable="!cdcBusy" :mask-closable="!cdcBusy" :keyboard="!cdcBusy" :body-style="{ maxHeight: '70vh', overflowY: 'auto' }" @cancel="cdcDetail = ''">
+  <a-modal :open="!!cdcDetail" :title="cdcCurrent?.supported ? cdcBinlog ? 'MySQL binlog CDC' : '事务触发器 CDC' : 'CDC 能力状态'" :z-index="900" :width="880" :footer="null" :closable="!cdcBusy" :mask-closable="!cdcBusy" :keyboard="!cdcBusy" :body-style="{ maxHeight: '70vh', overflowY: 'auto' }" @cancel="cdcDetail = ''">
     <p class="cn-cdc-source">{{ cdcObject?.name }} · {{ cdcDetail }}</p>
-    <p class="t-12 c-3">按键读取源当前态的 CDC 不能保证保留两次读取间的中间状态；需要完整转换历史时，请接入保存每次变化的源事件或审计日志。</p>
+    <p v-if="cdcCurrent?.supported && !cdcBinlog" class="t-12 c-3">按键读取源当前态的 CDC 不能保证保留两次读取间的中间状态；需要完整转换历史时，请接入保存每次变化的源事件或审计日志。</p>
     <a-alert v-if="cdcErrors[cdcDetail]" type="error" :message="cdcErrors[cdcDetail]" show-icon />
     <template v-if="cdcCurrent">
-      <p v-if="selected?.sync.mode !== '实时（CDC）'" class="t-12">启用前，请先编辑数据源，将同步方式保存为“实时（CDC）”；保存不会自动安装或启用任何对象。</p>
-      <a-alert v-if="cdcCurrent.migrationRequired" type="warning" message="CDC 数据库尚未完成 0049 升级，请联系管理员应用迁移后刷新；无需清库或解除绑定。" show-icon />
+      <p v-if="cdcBinlog" class="t-12">只消费已COMMIT的ROW/FULL行镜像；首次一致快照交叠回放到栅栏后发布。日志断档或DDL变化将停止并要求重建基线。</p>
+      <a-form-item v-if="cdcBinlog && cdcCurrent.supported" label="此订阅独有的复制 server-id" extra="须不同于源服务器及其他复制客户端，不能复用其他订阅的server-id"><a-input-number v-model:value="mysqlServerId" :min="1" :max="4294967295" :precision="0" :disabled="!!cdcBusy || cdcCurrent.enabled" /></a-form-item>
+      <p v-if="cdcCurrent.supported && selected?.sync.mode !== '实时（CDC）'" class="t-12">启用前，请先编辑数据源，将同步方式保存为“实时（CDC）”；保存不会自动安装或启用任何对象。</p>
+      <a-alert v-if="cdcCurrent.supported && cdcCurrent.migrationRequired" type="warning" message="CDC 数据库尚未完成 0049 升级，请联系管理员应用迁移后刷新；无需清库或解除绑定。" show-icon />
       <a-alert v-else-if="cdcCurrent.error" type="error" :message="cdcCurrent.error" show-icon />
       <p v-if="cdcCurrent.recoveryAction" class="t-12">{{ cdcRecovery[cdcCurrent.recoveryAction] }}</p>
       <a-descriptions :column="2" size="small" class="cn-mirror-details">
@@ -632,25 +662,28 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
         <a-descriptions-item label="采集心跳">{{ mirrorTime(cdcCurrent.heartbeatAt) }}</a-descriptions-item><a-descriptions-item label="最近观测">{{ mirrorTime(cdcCurrent.lastObservedAt) }}</a-descriptions-item>
         <a-descriptions-item label="捕获代次">{{ cdcCurrent.sourceGeneration || EMPTY }}</a-descriptions-item><a-descriptions-item label="待确认应用">{{ cdcCurrent.pendingAckCount ?? EMPTY }}</a-descriptions-item>
       </a-descriptions>
-      <p v-if="cdcCurrent.phase === 'paused'" class="t-12 c-3">已暂停增量消费，源端触发器仍捕获变更；恢复后继续处理积压。</p>
+      <p v-if="cdcCurrent.phase === 'paused'" class="t-12 c-3">{{ cdcBinlog ? '已暂停消费并保留binlog提交位置；若日志已清理，恢复时会要求重新建立基线。' : '已暂停增量消费，源端触发器仍捕获变更；恢复后继续处理积压。' }}</p>
       <p v-if="cdcCurrent.restartRequired" class="t-12">绑定或源结构已变化，请核对读取授权与源表，重新预览并确认安装后，再重新初始化。</p>
-      <div class="cn-cdc-actions">
+      <div v-if="cdcCurrent.supported" class="cn-cdc-actions">
         <a-button :loading="cdcBusy === 'probe'" :disabled="!!cdcBusy || cdcCurrent.migrationRequired" @click="cdcAction('probe')">检测 CDC 能力</a-button>
-        <a-button :loading="cdcBusy === 'plan'" :disabled="readonly || !!cdcBusy || cdcCurrent.migrationRequired || cdcProbes[cdcDetail]?.supported !== true || cdcCurrent.enabled" @click="cdcAction('plan')">预览安装 SQL</a-button>
+        <a-button v-if="cdcBinlog && cdcCurrent.installed" :disabled="!!cdcBusy || !cdcCurrent.version" @click="cdcEventMappingOpen = true">行事实事件映射</a-button>
+        <a-button :loading="cdcBusy === 'plan'" :disabled="readonly || !!cdcBusy || cdcCurrent.migrationRequired || cdcProbes[cdcDetail]?.supported !== true || cdcCurrent.enabled" @click="cdcAction('plan')">{{ cdcBinlog ? '预览订阅配置' : '预览安装 SQL' }}</a-button>
         <a-button v-if="cdcCurrent.installed && !cdcCurrent.enabled && cdcCurrent.phase !== 'paused' && !cdcCurrent.restartRequired" type="primary" :disabled="readonly || !!cdcBusy || cdcCurrent.migrationRequired || selected?.sync.mode !== '实时（CDC）' || mirrorActive(mirrorStates[cdcDetail])" :loading="cdcBusy === 'enable'" @click="cdcAction('enable')">启用 CDC</a-button>
         <a-button v-if="cdcCurrent.enabled" :disabled="readonly || !!cdcBusy" :loading="cdcBusy === 'pause'" @click="cdcAction('pause')">暂停消费</a-button>
+        <a-button v-if="cdcCurrent.enabled" :disabled="readonly || !!cdcBusy" :loading="cdcBusy === 'consume'" @click="cdcAction('consume')">推进当前对象</a-button>
         <a-button v-if="cdcCurrent.phase === 'paused' && !cdcCurrent.restartRequired && cdcCurrent.recoveryAction !== 'reinitialize'" type="primary" :disabled="readonly || !!cdcBusy || selected?.sync.mode !== '实时（CDC）' || mirrorActive(mirrorStates[cdcDetail])" :loading="cdcBusy === 'resume'" @click="cdcAction('resume')">恢复消费</a-button>
         <a-button v-if="cdcCurrent.installed && (cdcCurrent.restartRequired || cdcCurrent.recoveryAction === 'reinitialize') && !cdcCurrent.enabled" :disabled="readonly || !!cdcBusy || selected?.sync.mode !== '实时（CDC）' || mirrorActive(mirrorStates[cdcDetail])" :loading="cdcBusy === 'reinitialize'" @click="cdcAction('reinitialize')">重新初始化</a-button>
       </div>
       <p v-if="cdcProbes[cdcDetail]" class="cn-cdc-source">{{ cdcProbes[cdcDetail].message || cdcProbes[cdcDetail].error || cdcProbes[cdcDetail].details?.error || cdcProbes[cdcDetail].details?.message || (cdcProbes[cdcDetail].supported ? '当前对象支持事务触发器 CDC' : '当前对象不支持 CDC') }}<template v-if="cdcProbes[cdcDetail].requiredPrivileges?.length"> · 所需权限：{{ cdcProbes[cdcDetail].requiredPrivileges?.join('、') }}</template></p>
-      <template v-if="cdcPlan">
+      <template v-if="cdcCurrent.supported && cdcPlan">
         <p class="cn-cdc-source">源表：{{ cdcPlan.capture.schema }}.{{ cdcPlan.capture.table }}。将创建下列 SQL 中的捕获资源，请核对后安装。</p>
-        <pre class="cn-cdc-sql">{{ cdcSql }}</pre>
+        <p v-if="cdcBinlog" class="t-12">不执行源DDL；确认后可启用此授权表的binlog订阅。</p><pre v-else class="cn-cdc-sql">{{ cdcSql }}</pre>
         <template v-if="cdcPlan.bootstrapFenceSql"><p class="t-12">安装后事务栅栏：请求源表排他锁，成功后 COMMIT 释放锁；存在未结束事务或缺少 LOCK 权限时，须处理后重试同一安装计划。</p><pre class="cn-cdc-sql">{{ cdcFenceSql }}</pre></template>
-        <div class="cn-cdc-actions"><a-button @click="downloadCdcSql">下载 SQL</a-button><a-button type="primary" :disabled="readonly || !!cdcBusy || cdcCurrent.enabled || cdcCurrent.version !== cdcPlanVersion" :loading="cdcBusy === 'install'" @click="cdcAction('install')">确认安装源捕获</a-button></div>
+        <div class="cn-cdc-actions"><a-button v-if="!cdcBinlog" @click="downloadCdcSql">下载 SQL</a-button><a-button type="primary" :disabled="readonly || !!cdcBusy || cdcCurrent.enabled || cdcCurrent.version !== cdcPlanVersion" :loading="cdcBusy === 'install'" @click="cdcAction('install')">{{ cdcBinlog ? '确认订阅配置' : '确认安装源捕获' }}</a-button></div>
       </template>
     </template>
   </a-modal>
+  <CdcEventMappingModal v-if="cdcDetail && cdcCurrent?.version" v-model:open="cdcEventMappingOpen" :object-id="cdcDetail" :version="cdcCurrent.version" :paused="!cdcCurrent.enabled" />
   <a-modal :open="!!mirrorHistory" title="数据同步运行记录" :footer="null" :width="760" @cancel="mirrorHistory = ''">
     <a-descriptions v-if="mirrorHistoryState" :column="2" size="small" class="cn-mirror-details">
       <a-descriptions-item label="当前状态">{{ mirrorText(mirrorHistoryState) }}</a-descriptions-item><a-descriptions-item label="已处理 / 当前镜像">{{ fmtInt(mirrorHistoryState.processed) }} / {{ fmtInt(mirrorHistoryState.currentStored) }} 行</a-descriptions-item>
@@ -669,7 +702,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
     <a-select v-model:value="chosenSchemas" mode="multiple" show-search :options="schemas.map(s => ({value:s,label:s}))" style="width:100%" placeholder="选择 1 至 32 个 Schema" />
     <p v-if="!schemas.length" class="t-12 c-3">此连接没有可访问的 Schema。</p>
   </a-modal>
-  <ExternalReadBindingModal v-if="governedObject && selected?.type === '达梦 DM8'" v-model:open="governedOpen" :object-id="governedObject" @saved="loadMirrors" />
+  <ExternalReadBindingModal v-if="governedObject && ['达梦 DM8', 'MySQL'].includes(selected?.type ?? '')" v-model:open="governedOpen" :object-id="governedObject" @saved="loadMirrors()" />
   <GovernedBindingModal v-else-if="governedObject" v-model:open="governedOpen" :object-id="governedObject" />
   <a-drawer
     :open="!!formMode" :width="560" :title="formMode === 'edit' ? `编辑连接 · ${selected?.name ?? ''}` : '新建数据连接'"
@@ -707,13 +740,7 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
           <a-input-password v-model:value="form.password" :placeholder="formMode === 'edit' ? '不修改请留空' : ''" autocomplete="new-password" />
         </a-form-item>
       </div>
-      <div class="cn-form-row">
-        <a-form-item label="同步方式">
-          <a-select v-model:value="form.mode" :options="(form.type === '达梦 DM8' ? ['手动', '定时全量', '实时（CDC）'] : ['定时增量', '定时全量', '实时（CDC）', '手动']).map((v) => ({ value: v, label: v }))" />
-        </a-form-item>
-        <a-form-item label="频率（cron）"><a-input v-model:value="form.cron" class="num" :disabled="form.mode === '手动' || form.mode === '实时（CDC）'" /></a-form-item>
-      </div>
-      <div class="t-12 c-3">{{ form.type === '达梦 DM8' && form.mode === '实时（CDC）' ? '保存仅选择同步方式；请在同步计划中逐个对象检测、预览 SQL 并确认安装与启用。安装需要源端建表及触发器权限。' : '全量读取使用只读账号。' }} 密码加密保存，保存后不再显示。</div>
+      <p class="t-12 c-3">数据同步由平台后台统一托管，连接页不再要求配置同步方式或频率。保存后密码加密保存，不再显示。</p>
     </a-form>
     <template #footer>
       <div class="cn-foot">
@@ -736,19 +763,16 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
 .cn-map-name { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cn-menu-name { display: block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cn { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.cn-list { width: 380px; flex: none; }
+.cn-list { flex: none; }
 .cn-filter { display: flex; gap: 8px; padding: 10px 16px; border-bottom: var(--border); }
 .cn-w140 { width: 140px; flex: none; }
 .cn-w200 { width: 200px; }
-.cn-items { flex: 1; min-height: 0; overflow: hidden; }
-.cn-item { padding: 9px 16px; border-bottom: var(--border); cursor: pointer; border-left: 3px solid transparent; }
-.cn-item:hover { background: var(--g2); }
-.cn-item.on { background: var(--brand-bg); border-left-color: var(--brand); }
+.cn-items { flex: 1; min-height: 0; }
 .cn-item-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .cn-type { flex: none; min-width: 42px; text-align: center; border: var(--border); border-radius: 4px; color: var(--g8); line-height: 18px; }
 .cn-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .cn-badge { margin-left: auto; flex: none; }
-.cn-pager { padding: 6px 16px; }
+.cn-item :deep(.ant-badge-status-text) { color: var(--g9); font-size: 12px; line-height: 18px; font-weight: 400; }
 .cn-detail { flex: 1; min-width: 0; }
 .cn-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 14px 20px 6px; }
 .cn-title { display: flex; flex: 1 1 480px; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
@@ -771,7 +795,8 @@ const runColor = (r: string) => (r === '成功' ? 'tl-normal' : r === '延迟' ?
 .cn-tbar { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-bottom: 8px; }
 .cn-tscroll { flex: 1; min-height: 0; min-width: 0; }
 .cn-tscroll :deep(.ant-table-content > table) { min-width: 1110px !important; }
-.cn-tpager { padding-top: 6px; }
+/* Keep the table pager outside the fixed build-assistant launcher's 118px + edge/gap area. */
+.cn-tpager { padding: 6px 160px 0 0; }
 .cn-desc :deep(.ant-descriptions-item-label) { width: 140px; }
 .cn-desc :deep(.ant-descriptions-view > table) { width: 100%; table-layout: fixed; }
 .cn-desc :deep(.ant-descriptions-item-content) { overflow-wrap: anywhere; }

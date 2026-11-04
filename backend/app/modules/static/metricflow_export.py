@@ -1,6 +1,6 @@
 """指标 / 维度定义导出为 MetricFlow 语义层格式（只读）。
 
-只导出当前空间里能被试算编译器完整解析的已发布指标：对象、属性、时间字段、默认过滤都经
+只导出当前空间里能被试算编译器完整解析的已发布指标：对象、属性、可选时间字段、默认过滤都经
 compile_metric 校验，导出口径与试算一致；其余指标列入 skipped 并附原因，不猜测、不补默认值。
 敏感 / 隐藏属性不导出为维度。行级权限不随定义导出，消费方必须自行按调用者范围过滤。
 """
@@ -20,8 +20,10 @@ from app.modules.static.metric_trial import (
     BoundFormula,
     compile_metric,
     execution_bindings,
+    metric_column,
     metric_definition,
     parse_formula,
+    program_details,
     unavailable,
 )
 from app.modules.static.models import Dimension, Metric, ObjectType
@@ -31,6 +33,7 @@ COMPARE = {exp.EQ: "=", exp.NEQ: "<>", exp.GT: ">", exp.GTE: ">=", exp.LT: "<", 
 NOTES = [
     "仅含可试算的已发布指标；其余见 skipped。",
     "行级权限不随定义导出：消费方必须按调用者的数据范围过滤后再计算。",
+    "无时间字段指标通过平台内置确定性编译器执行快照汇总；原生 MetricFlow 的时间查询仍需时间字段。",
 ]
 
 
@@ -50,7 +53,9 @@ class _Model:
     """一个对象对应一个 semantic model；维度按引用逐步登记。"""
 
     def __init__(self, obj: ObjectType, gov):
-        pk = next((p for p in obj.properties if p.api_name == obj.pk_property), None)
+        from app.modules.qa.object_source import primary_property
+
+        pk = primary_property(obj)
         self.obj, self.gov = obj, gov
         self.entity = obj.code
         self.out: dict[str, Any] = {
@@ -63,7 +68,10 @@ class _Model:
                 {
                     "name": obj.code,
                     "type": "primary",
-                    "expr": (pk.backing_column or pk.source_column) if pk is not None else "id",
+                    "expr": (
+                        pk.source_column if getattr(gov, "source_sql", None)
+                        else pk.backing_column or pk.source_column
+                    ) if pk is not None else "id",
                 }
             ],
             "dimensions": [],
@@ -85,8 +93,8 @@ class _Model:
         return prop.api_name
 
 
-def _prop_of(obj: ObjectType, col):
-    return next(p for p in obj.properties if (p.backing_column or p.source_column) == col.key)
+def _prop_of(obj: ObjectType, col, gov):
+    return next(p for p in obj.properties if metric_column(p, gov) is col)
 
 
 def _filters(bound: BoundFormula, model: _Model, node) -> list[str]:
@@ -108,7 +116,7 @@ def _filters(bound: BoundFormula, model: _Model, node) -> list[str]:
         raise unavailable("过滤值必须是明确的标量")
     if raw in ("是", "否") and col.type.python_type is bool:
         raw = raw == "是"
-    name = model.dimension(_prop_of(bound.object, col), col)
+    name = model.dimension(_prop_of(bound.object, col, bound.governed), col)
     ref = (
         f"{{{{ TimeDimension('{model.entity}__{name}', 'day') }}}}"
         if isinstance(col.type, (Date, DateTime))
@@ -123,18 +131,21 @@ def _export_metric(
     bound, _expression, temporal, _time_field, _conds = compile_metric(
         metric, objects, ontology_id, bindings, session
     )
-    if temporal is None:
-        raise unavailable("语义层时间查询需要明确的时间字段")
-    if getattr(bound.governed, "binding", None) is not None:
-        raise unavailable(
-            "该指标使用专用只读来源，可在指标页试算；当前语义层执行器尚不支持该来源",
-            reason="SEMANTIC_SOURCE_UNSUPPORTED",
-        )
+    tree = parse_formula(metric.get("formula"))
+    if getattr(bound.governed, "binding", None) is not None or any(
+        isinstance(n, (exp.Case, exp.Distinct, exp.Coalesce, exp.Round, exp.Abs)) for n in tree.walk()
+    ) or any(not isinstance(n.this, exp.Column) for n in tree.find_all(*AGG)):
+        return [{"name": row.api_name, "type": "program", "label": row.display_name,
+                 "description": metric.get("formula"), "type_params": {"metricCode": row.code},
+                 "config": {"meta": {"rengu": {"id": row.code, "version": row.version,
+                 "unit": row.unit, "status": row.status.value, "hasTimeField": temporal is not None}}}}]
     model = models.get(bound.object.code) or models.setdefault(
         bound.object.code, _Model(bound.object, bound.governed)
     )
-    time_dim = model.dimension(_prop_of(bound.object, temporal), temporal)
-    model.out["defaults"].setdefault("agg_time_dimension", time_dim)
+    time_dim = None
+    if temporal is not None:
+        time_dim = model.dimension(_prop_of(bound.object, temporal, bound.governed), temporal)
+        model.out["defaults"].setdefault("agg_time_dimension", time_dim)
     tree = parse_formula(metric.get("formula"))
     filters: list[str] = []
     if tree.args.get("where"):
@@ -147,7 +158,9 @@ def _export_metric(
     while isinstance(root, exp.Paren):
         root = root.this
     aggs = list(root.find_all(*AGG))
-    meta = {"rengu": {"id": row.code, "version": row.version, "unit": row.unit, "status": row.status.value}}
+    meta = {"rengu": {"id": row.code, "version": row.version, "unit": row.unit,
+                      "status": row.status.value, "hasTimeField": temporal is not None,
+                      "timeDimension": time_dim}}
     base = {"label": row.display_name, "description": metric.get("formula") or "", "config": {"meta": meta}}
     out, names = [], []
     single = len(aggs) == 1 and aggs[0] is root
@@ -157,9 +170,10 @@ def _export_metric(
             expr = model.out["entities"][0]["expr"]
         else:
             expr = str(bound.column(node.this).key)
-        model.out["measures"].append(
-            {"name": name, "agg": AGG[type(node)], "expr": expr, "agg_time_dimension": time_dim}
-        )
+        measure = {"name": name, "agg": AGG[type(node)], "expr": expr}
+        if time_dim is not None:
+            measure["agg_time_dimension"] = time_dim
+        model.out["measures"].append(measure)
         simple: dict[str, Any] = {"name": name, "type": "simple", "type_params": {"measure": name}}
         if filters:
             simple["filter"] = " AND ".join(filters)
@@ -200,7 +214,19 @@ async def export_metricflow(session, user: CurrentUser, *, ver=None) -> dict:
     metrics, skipped = [], []
     for row in await session.scalars(select(Metric).order_by(Metric.code)):
         try:
+            from app.modules.governance.policy import enforce
+            from app.modules.static.lineage import identity
+            from app.modules.static.metric_program import is_program
+
+            await enforce(session, user, [identity("metric", row.code)], "read")
             metric = await metric_definition(session, row.code, user)
+            if is_program(parse_formula(metric["formula"])):
+                info = await program_details(session, user, metric)
+                metrics.append({"name": row.api_name, "type": "program", "label": row.display_name,
+                                "description": metric["formula"], "type_params": {"metricCode": row.code},
+                                "config": {"meta": {"rengu": {"id": row.code, "version": row.version,
+                                "unit": row.unit, "status": row.status.value, **info}}}})
+                continue
             bindings = await execution_bindings(session, objects, metric)
             from app.common.sql_guard import ensure_governed_tables
 
@@ -217,10 +243,9 @@ async def export_metricflow(session, user: CurrentUser, *, ver=None) -> dict:
         prop = next((p for p in model.obj.properties if p.api_name == dim.attr), None) if model else None
         if prop is None or prop.is_sensitive or prop.visibility == "hidden" or prop.transform:
             continue
-        column = prop.backing_column or prop.source_column
-        binding = getattr(model.gov, "binding", None)
-        if column in model.gov.table.c and (binding is None or prop.api_name in binding.out) and (getattr(model.gov, "projection", None) is None or column in model.gov.projection):
-            model.dimension(prop, model.gov.table.c[column], label=dim.display_name)
+        column = metric_column(prop, model.gov)
+        if column is not None:
+            model.dimension(prop, column, label=dim.display_name)
     return {
         "semantic_models": [m.out for m in models.values()],
         "metrics": metrics,

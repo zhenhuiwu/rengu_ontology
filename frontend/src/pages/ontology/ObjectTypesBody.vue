@@ -352,8 +352,10 @@ const realDetail = ref<Partial<DefinitionValues>>({});
 const detailError = ref('');
 const runtime = ref<ObjectOverviewRuntime | null>(null);
 let detailSeq = 0;
-watch(() => [selected.value, staticContextKey(), app.ontologyVersion, route.query.view, workflow.loading.value,
-  draft.value?.id, cr.loading.value, cr.error.value, newTarget.value], async () => {
+const objectDetailKey = () => JSON.stringify([selected.value, staticContextKey(), app.ontologyVersion, route.query.view,
+  route.query.view === 'draft' || newTarget.value ? workflow.loading.value : false,
+  draft.value?.id, cr.loading.value, cr.error.value, newTarget.value]);
+watch(objectDetailKey, async () => {
   const my = ++detailSeq, id = selected.value, key = staticContextKey(); realDetail.value = {}; detailError.value = ''; runtime.value = null;
   if (!isStaticReal() || !selected.value || newTarget.value || (route.query.view === 'draft' && workflow.loading.value)
     || (draft.value && (cr.loading.value || !cr.head.value || cr.error.value))) return;
@@ -378,7 +380,7 @@ const meta = computed(() => isStaticReal() ? { domain: '', desc: '', conflict: '
 const qo = computed(() => {
   if (!isStaticReal()) return qObjType(current.value.id);
   const fields = { ...realDetail.value, ...(isDraft.value ? draftFields(cr.items.value, 'def') : {}) };
-  return { owner: String(fields.owner ?? '—'), source: String(fields.source ?? '—'), cutoff: String(fields.cutoff ?? '—') };
+  return { owner: String(fields.owner ?? '—'), source: String(fields.sourceName ?? fields.source ?? '—'), cutoff: String(fields.cutoff ?? '—') };
 });
 const sourceDb = computed(() => isStaticReal() ? String(realDetail.value.db ?? '—') : dbOf(qo.value?.source));
 const titleProp = computed(() => PROPS.value.find((p) => p.title));
@@ -412,20 +414,20 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
   </Teleport>
 
   <div class="ot">
-    <div class="panel ot-list">
+    <div class="panel ot-list side-list">
       <div class="ot-search"><a-input-search v-model:value="kw" placeholder="搜索名称或 API 名" /></div>
       <a-alert v-if="objectPage.error.value || detailError" type="error" :message="objectPage.error.value || detailError" show-icon />
       <div v-if="objectPage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
-      <ul class="ot-items" :aria-busy="objectPage.loading.value">
-        <li v-for="t in list" :key="t.id" :class="{ active: t.id === current.id }" :title="`${t.name} · ${t.api} · ${t.group}`" @click="pick(t.id)">
-          <div class="ot-row">
-            <span class="t-14 ot-name">{{ t.name }}</span>
-            <span class="t-12 c-3 ot-grp">{{ t.group }}</span>
-            <span v-if="shownStatus(t) !== '已发布'" class="t-12 num" :class="shownStatus(t) === '审核中' ? 'c-warning' : 'c-3'">{{ shownStatus(t) }}</span>
+      <ul class="ot-items side-list-items" :aria-busy="objectPage.loading.value">
+        <li v-for="t in list" :key="t.id" class="side-list-item" :class="{ active: t.id === current.id }" :title="`${t.name} · ${t.api} · ${t.group}`" @click="pick(t.id)">
+          <div class="ot-row side-list-row">
+            <span class="t-14 ot-name side-list-name">{{ t.name }}</span>
+            <span class="t-12 c-3 ot-grp side-list-meta">{{ t.group }}</span>
+            <span v-if="shownStatus(t) !== '已发布'" class="t-12 num side-list-meta" :class="shownStatus(t) === '审核中' ? 'c-warning' : 'c-3'">{{ shownStatus(t) }}</span>
           </div>
         </li>
       </ul>
-      <div class="ot-foot">
+      <div class="ot-foot side-list-foot">
         <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" unit="条" />
       </div>
     </div>
@@ -448,7 +450,7 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
       <GroupedTabs v-model="tab" :groups="TAB_GROUPS" />
 
       <!-- 配置了 component 的页签：统一传 objectId / readonly -->
-      <component :is="curTab.component" v-if="curTab?.component" :key="`${current.id}:${curTab.key}`" :object-id="current.id" :readonly="!canEdit" />
+      <component :is="curTab.component" v-if="curTab?.component" :key="`${current.id}:${curTab.key}`" :object-id="current.id" :readonly="curTab.key === 'lifecycle' && isStaticReal() ? readonly : !canEdit" />
 
       <!-- 概览 -->
       <div v-else-if="tab === 'overview'" class="ot-body ot-ov">
@@ -629,17 +631,12 @@ onBeforeUnmount(() => { ++detailSeq; ++runtimeSeq; ++linksSeq; });
 
 <style scoped>
 .ot { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.ot-list { width: 280px; flex: none; }
+.ot-list { flex: none; }
 .ot-search { padding: 12px 12px 8px; flex: none; }
-.ot-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
-.ot-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
-.ot-items li:hover { background: var(--g3); }
-.ot-items li.active { background: var(--brand-bg); }
-.ot-items li.active .ot-name { color: var(--brand); }
+.ot-items { flex: 1; min-height: 0; }
 .ot-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .ot-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ot-grp { flex-shrink: 0; }
-.ot-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; justify-content: space-between; }
 .ot-detail { flex: 1; }
 .ot-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
 .ot-sp { flex: 1; }

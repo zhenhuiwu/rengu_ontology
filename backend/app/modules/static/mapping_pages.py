@@ -253,13 +253,18 @@ async def dim_mappings(svc, code, conflict, p, cr_code=None):
     parent, saved = await target(svc, Dimension, code, cr_code, "dimension")
     rows = candidates(svc, parent, saved, code)
     conflict_filter = rows.c.data["conflictText"].as_string() != ""
-    conflict_count = int(
-        await svc.session.scalar(select(func.count()).select_from(rows).where(conflict_filter)) or 0
-    )
+    total_count, conflict_count = (await svc.session.execute(
+        select(func.count(), func.sum(case((conflict_filter, 1), else_=0))).select_from(rows)
+    )).one()
+    conflict_count = int(conflict_count or 0)
+    total = conflict_count if conflict else int(total_count)
+    actual = p.clamp(total)
     stmt = select(rows.c.data).order_by(rows.c.bucket, rows.c.seq, rows.c.subseq, rows.c.key)
     if conflict:
         stmt = stmt.where(conflict_filter)
-    items, total, actual = await svc.repo.page(stmt, p)
+    items = list((await svc.session.execute(
+        stmt.offset(actual.offset).limit(actual.size)
+    )).scalars()) if total else []
     return {
         **Page.of([compact_value(row) for row in items], total, actual).model_dump(),
         "conflictCount": conflict_count,

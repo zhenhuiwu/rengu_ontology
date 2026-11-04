@@ -12,7 +12,7 @@ from app.modules.dynamic.models import ActionRun, ActionStatus
 from app.modules.event.models import Event, EventOutcome, EventType
 from app.modules.event.service import EventTypeService
 from app.modules.static import shapes
-from app.modules.static.models import ChangeRequest, CRStatus, CrTarget
+from app.modules.static.models import ChangeRequest, CRStatus, CrTarget, Dimension
 from app.modules.static.service import StaticService, paginate
 from app.modules.versioning.repo import ReleaseRepo
 
@@ -38,13 +38,22 @@ async def quality_state(svc: StaticService, user: CurrentUser):
 
 async def overview(svc: StaticService, user: CurrentUser) -> dict:
     await svc._check_ver()
-    objects = [shapes.object_list_item(o, 0) for o in await svc.repo.object_types()]
-    metrics = [shapes.metric_list_item(m) for m in await svc.repo.metrics()]
     if svc.ver:
         objects = list((await svc._section("objectTypes") or {}).values())
         metrics = list((await svc._section("metrics") or {}).values())
+    else:
+        objects = [shapes.object_list_item(o, 0) for o in await svc.repo.object_types(light=True)]
+        metrics = [shapes.metric_list_item(m) for m in await svc.repo.metrics()]
     links = await svc._links()
-    dims = [d for d in await svc._dims() if d.get("status") != "已驳回"]
+    if svc.ver:
+        dims = [d for d in await svc._dims() if d.get("status") != "已驳回"]
+    else:
+        rows = await svc.session.execute(select(Dimension.code, Dimension.kind, Dimension.status))
+        dims = [
+            {"id": code, "kind": kind.value, "status": status.value}
+            for code, kind, status in rows
+            if status.value != "已驳回"
+        ]
     actions = await ActionTypeService(svc.session).defs(svc.ctx)
     events = await EventTypeService(svc.session).defs(svc.ctx)
     quality_checks, quality_runs = await quality_state(svc, user)
@@ -67,26 +76,27 @@ async def overview(svc: StaticService, user: CurrentUser) -> dict:
         )
         for kind, code in rows:
             changes.setdefault(kind, set()).add(code)
+    from app.modules.governance.dynamic_guard import read_scope
     run_counts = dict(
         (
             await svc.session.execute(
-                select(ActionRun.status, func.count())
+                await read_scope(svc.session, svc.session.info.get("governance_user"), select(ActionRun.status, func.count())
                 .where(
                     ActionRun.action_type_code.in_([a["id"] for a in actions]), ActionRun.in_center.is_(False), ActionRun.deleted_at.is_(None)
                 )
-                .group_by(ActionRun.status)
+                .group_by(ActionRun.status), ActionRun)
             )
         ).all()
     )
     failed_events = await svc.session.scalar(
-        select(func.count())
+        await read_scope(svc.session, svc.session.info.get("governance_user"), select(func.count())
         .select_from(Event)
         .join(EventType, EventType.id == Event.event_type_id)
         .where(
             EventType.code.in_([e["id"] for e in events]),
             Event.is_test.is_(False),
             Event.outcome == EventOutcome.failed,
-        )
+        ), Event)
     )
 
     def health(n: int, text: str, tone: str = "normal") -> dict:

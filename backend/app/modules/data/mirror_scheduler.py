@@ -29,7 +29,7 @@ def next_slot(mode, cron, now=None):
     if mode in (DsSyncMode.manual, DsSyncMode.cdc):
         return None
     if mode != DsSyncMode.full:
-        raise AppError('达梦镜像仅支持定时全量或手动', code='MIRROR_SCHEDULE_INVALID', status_code=422)
+        raise AppError('外部镜像仅支持定时全量或手动', code='MIRROR_SCHEDULE_INVALID', status_code=422)
     if len(cron.split()) != 5 or not croniter.is_valid(cron):
         raise AppError('定时同步需要有效的五段 Cron 表达式', code='MIRROR_SCHEDULE_INVALID', status_code=422)
     local = (now or datetime.now(UTC)).astimezone(ZoneInfo(get_settings().display_tz))
@@ -131,7 +131,7 @@ async def sweep():
                 session.info['workspace_worker'] = True
                 await set_ontology_scope(session, oid)
                 ids = list(await session.scalars(select(Datasource.id).where(
-                    Datasource.type == DsType.dm8, Datasource.mirror_schedule_actor.is_not(None),
+                    Datasource.type.in_((DsType.dm8, DsType.mysql)), Datasource.mirror_schedule_actor.is_not(None),
                     Datasource.sync_next_run <= datetime.now(UTC)).order_by(Datasource.sync_next_run).limit(20)))
             for source_id in ids:
                 async with get_sessionmaker()() as session:

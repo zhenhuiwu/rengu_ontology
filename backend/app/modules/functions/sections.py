@@ -3,19 +3,21 @@
 from pydantic import ValidationError
 from sqlalchemy import delete, select
 
+from app.common.ontology import require_ontology_id
 from app.core.errors import AppError
 from app.modules.admin.models import SysUser
+from app.modules.functions.executor import definition_signature
 from app.modules.functions.models import FnParam, FnVersion, Function
 from app.modules.functions.references import function_uses
-from app.modules.functions.runtime import json_value, signature
+from app.modules.functions.runtime import json_value
 from app.modules.functions.schemas import CreateIn, ParamIn
-from app.modules.functions.service import FIELDS, next_version
+from app.modules.functions.service import EXEC_FIELDS, FIELDS, RUNTIMES, execution_fields, next_version
 from app.modules.static.models import CrItem
 from app.modules.static.writeback import Ctx, register_writeback, writeback_error
 
 
 async def publish_definition(ctx: Ctx, code: str, rows: list[CrItem]) -> set[str]:
-    allowed = {*FIELDS, "_baseLockVersion", "_rollbackOf"}
+    allowed = {*FIELDS, *EXEC_FIELDS, "_baseLockVersion", "_rollbackOf"}
     if any(row.item_key not in allowed or row.op == "delete" for row in rows):
         raise writeback_error("函数定义含未知字段或删除操作", id=code)
     values = {row.item_key: row.after for row in rows}
@@ -28,9 +30,12 @@ async def publish_definition(ctx: Ctx, code: str, rows: list[CrItem]) -> set[str
             desc=values["desc"],
             timeout_s=values["timeoutS"],
             code=values["code"],
+            runtime_mode=values.get("runtimeMode", "local"),
+            remote=values.get("remote"),
         )
+        execution = execution_fields(body, require_ontology_id(ctx.session))
         # Re-infer the stored signature; CR callers cannot inject different parameter metadata.
-        inferred_inputs, inferred_output = signature(body.code, body.name)
+        inferred_inputs, inferred_output = definition_signature({**values, **execution})
         if not isinstance(values["inputs"], list) or len(values["inputs"]) > 32:
             raise ValueError("入参最多 32 个")
         inputs = [ParamIn.model_validate(p).model_dump(exclude_none=True) for p in values["inputs"]]
@@ -69,7 +74,7 @@ async def publish_definition(ctx: Ctx, code: str, rows: list[CrItem]) -> set[str
         fn = Function(
             code=code,
             name=body.name,
-            runtime="受限纯计算表达式",
+            runtime=RUNTIMES[body.runtime_mode],
             status="published",
             owner_id=definition_owner,
             title=body.title,
@@ -94,6 +99,15 @@ async def publish_definition(ctx: Ctx, code: str, rows: list[CrItem]) -> set[str
         new_signature[("out", 0)] = (output["name"], output["type"])
         if used and old_signature != new_signature:
             raise writeback_error("函数被动作或规则引用，不能发布不兼容的签名变更", id=code)
+        if used and body.runtime_mode == "remote_http":
+            latest = await ctx.session.scalar(
+                select(FnVersion).where(FnVersion.function_id == fn.id)
+                .order_by(FnVersion.id.desc()).limit(1)
+            )
+            old_remote = latest.snapshot.get("remote") if latest else None
+            if old_remote and any(old_remote.get(key) != execution["remote"][key]
+                                  for key in ("inputSchema", "outputSchema")):
+                raise writeback_error("函数被动作或规则引用，不能发布不兼容的远程合同", id=code)
         fn.title, fn.timeout_s, fn.description, fn.code_text = (
             body.title,
             body.timeout_s,
@@ -101,6 +115,7 @@ async def publish_definition(ctx: Ctx, code: str, rows: list[CrItem]) -> set[str
             body.code,
         )
         fn.sample_in, fn.sample_out, fn.status = values["sampleIn"], values["sampleOut"], "published"
+        fn.runtime = RUNTIMES[body.runtime_mode]
     versions = list(await ctx.session.scalars(select(FnVersion).where(FnVersion.function_id == fn.id)))
     await ctx.session.execute(delete(FnParam).where(FnParam.function_id == fn.id))
     for direction, params in (("in", inputs), ("out", [output])):
@@ -109,6 +124,7 @@ async def publish_definition(ctx: Ctx, code: str, rows: list[CrItem]) -> set[str
                 FnParam(function_id=fn.id, direction=direction, seq=seq, **param, created_by=ctx.by)
             )
     snapshot = {key: values[key] for key in FIELDS}
+    snapshot.update(execution)
     snapshot["inputs"], snapshot["output"] = inputs, output
     ctx.session.add(
         FnVersion(

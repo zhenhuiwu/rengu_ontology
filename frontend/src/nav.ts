@@ -40,6 +40,7 @@ export const NAV: NavArea[] = [
       ] },
       { key: 'ontology', title: '本体', icon: 'ApartmentOutlined', pages: [
         { key: 'ontology-overview', title: '本体总览', path: '/build/ontology/overview', phase: 1, group: '资源', note: '关系图谱', component: () => import('@/pages/ontology/OntologyOverview.vue') },
+        { key: 'ontology-lineage', title: '数据血缘', path: '/build/ontology/lineage', phase: 1, group: '资源', note: '可见定义的来源字段与上下游依据', component: () => import('@/pages/ontology/Lineage.vue') },
         { key: 'object-types', title: '对象类型', path: '/build/ontology/object-types', phase: 1, group: '资源', note: '页签分三组：定义（概览、属性、关系、数据源与映射）、行为（生命周期、动作、自动化）、使用与治理（指标、视图、权限、版本历史）', component: () => import('@/pages/ontology/ObjectTypes.vue') },
         { key: 'link-types', title: '关系类型', path: '/build/ontology/link-types', phase: 1, group: '资源', component: () => import('@/pages/ontology/LinkTypes.vue') },
         { key: 'action-types', title: '动作类型', path: '/build/ontology/action-types', phase: 3, group: '资源', note: '页签：参数、提交条件、写回模式、执行记录', component: () => import('@/pages/ontology/ActionTypes.vue') },
@@ -60,6 +61,7 @@ export const NAV: NavArea[] = [
       { key: 'system', title: '系统管理', icon: 'SettingOutlined', pages: [
         { key: 'users', title: '用户与组织', path: '/admin/system/users', phase: 1, component: () => import('@/pages/admin/Users.vue') },
         { key: 'roles', title: '角色与权限', path: '/admin/system/roles', phase: 1, note: '含以某用户预览' },
+        { key: 'governance', title: '数据治理', path: '/admin/system/governance', phase: 1, component: () => import('@/pages/admin/Governance.vue') },
         { key: 'audit', title: '审计日志', path: '/admin/system/audit', phase: 1, component: () => import('@/pages/admin/AuditLog.vue') },
         { key: 'api-keys', title: 'API 密钥', path: '/admin/system/api-keys', phase: 3 },
         { key: 'settings', title: '模型与系统配置', path: '/admin/system/settings', phase: 1 },

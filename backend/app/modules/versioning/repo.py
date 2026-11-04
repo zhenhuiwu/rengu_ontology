@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
+from sqlalchemy.orm import defaultload, defer
 
 from app.common.pagination import PageParams
 from app.common.repository import BaseRepository
@@ -34,6 +35,27 @@ class ReleaseRepo(BaseRepository[OntologyRelease]):
 
     async def formal(self) -> Sequence[OntologyRelease]:
         return (await self.session.scalars(self._ordered().where(OntologyRelease.scope == "formal"))).all()
+
+    async def formal_page(self, page: PageParams, kw: str = "") -> tuple[Sequence[OntologyRelease], int]:
+        stmt = self._ordered().where(OntologyRelease.scope == "formal").options(
+            defer(OntologyRelease.snapshot, raiseload=True),
+            defer(OntologyRelease.change_summary, raiseload=True),
+            defaultload(OntologyRelease.parent).load_only(OntologyRelease.ver, raiseload=True).raiseload("*"),
+            defaultload(OntologyRelease.rollback_target).load_only(
+                OntologyRelease.ver, raiseload=True
+            ).raiseload("*"),
+        )
+        if kw.strip():
+            stmt = stmt.where(or_(
+                OntologyRelease.ver.icontains(kw.strip(), autoescape=True),
+                OntologyRelease.note.icontains(kw.strip(), autoescape=True),
+            ))
+        return await self.list_page(stmt, page)
+
+    async def latest_formal_ver(self) -> str | None:
+        return await self.session.scalar(select(OntologyRelease.ver).where(
+            OntologyRelease.scope == "formal"
+        ).order_by(OntologyRelease.id.desc()).limit(1))
 
     async def page(self, page: PageParams) -> tuple[Sequence[OntologyRelease], int]:
         return await self.list_page(self._ordered(), page)

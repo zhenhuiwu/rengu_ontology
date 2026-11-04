@@ -42,9 +42,13 @@ async def object_detail(svc, code):
             **{key: data[key] for key in ("name", "api", "group", "source", "owner", "pk") if key in data},
             "key": code,
         },
-        "db": "--",
+        "db": shapes.db_of(data.get("source")),
     }
     out["props"] = props
+    from app.modules.static.source_labels import labels
+    source = (await labels(svc.session, [data.get('source')])).get(data.get('source'), {})
+    out.update({key: value for key, value in source.items() if key == 'db'})
+    out['brief'].update({key: value for key, value in source.items() if key == 'sourceName'})
     return out
 
 

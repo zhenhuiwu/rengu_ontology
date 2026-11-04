@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import sqlglot
 from pydantic import Field, model_validator
-from sqlalchemy import Date, DateTime, Numeric, String, cast, func, literal, select
+from sqlalchemy import Date, DateTime, Integer, Numeric, String, case, cast, distinct, func, literal, or_, select
 from sqlalchemy.dialects import postgresql
 from sqlglot import exp
 
@@ -25,6 +25,7 @@ from app.modules.static.models import ChangeRequest, CrItem, CRStatus, CrTarget,
 from app.modules.static.permissions import check_cr
 from app.modules.static.schemas import ItemIn
 from app.modules.static.trials import invalid, valid_context
+from app.modules.static.metric_program import bounded
 from app.modules.versioning.repo import ReleaseRepo
 
 
@@ -268,10 +269,39 @@ class BoundFormula:
             )
         return column
 
-    def expression(self, node):
+    @staticmethod
+    def numeric(value):
+        from sqlalchemy import Integer
+        from sqlalchemy.sql.elements import BindParameter
+        from sqlalchemy.sql.sqltypes import NullType
+        is_null = isinstance(value, BindParameter) and value.value is None and isinstance(value.type, NullType)
+        if not isinstance(value.type, (Numeric, Integer)) and not is_null:
+            raise unavailable("数值运算的全部参数必须来自数值列或数值表达式，不能将文本强制转换为数值")
+        return value
+
+    @staticmethod
+    def compatible(values):
+        from sqlalchemy import Boolean, Integer
+        from sqlalchemy.sql.elements import BindParameter
+        from sqlalchemy.sql.sqltypes import NullType
+        kinds = set()
+        for value in values:
+            if isinstance(value.type, NullType) and isinstance(value, BindParameter) and value.value is None:
+                continue
+            if isinstance(value.type, NullType):
+                raise unavailable("表达式没有可验证的返回类型，不能据此推断分支类型兼容")
+            kinds.add("number" if isinstance(value.type, (Numeric, Integer)) else
+                      "text" if isinstance(value.type, String) else
+                      "boolean" if isinstance(value.type, Boolean) else type(value.type).__name__)
+        if len(kinds) > 1:
+            raise unavailable("CASE与COALESCE的全部返回分支必须类型兼容，不能混合文本、数值和日期")
+
+    def expression(self, node, *, row=False):
         if isinstance(node, exp.Paren):
-            return self.expression(node.this)
+            return self.expression(node.this, row=row)
         if isinstance(node, (exp.Sum, exp.Count, exp.Avg, exp.Min, exp.Max)):
+            if row:
+                raise unavailable("不能在聚合函数内部再次聚合")
             self.aggregates += 1
             if isinstance(node, exp.Count) and isinstance(node.this, exp.Column) and not node.this.table:
                 gov = self.bind_object(node.this.name)
@@ -281,12 +311,16 @@ class BoundFormula:
                 if binding is not None:
                     return func.count(binding.id_col)
                 return func.count(primary_column(self.object, gov) if gov.source_sql else gov.table.c.id)
-            col = self.column(node.this)
-            if isinstance(node, exp.Count) and isinstance(col.type, (Date, DateTime)):
-                self.count_times[col.key] = (f"{self.object.code}.{node.this.name}", col)
+            arg = node.this
+            dedup = isinstance(arg, exp.Distinct)
+            if dedup:
+                if len(arg.expressions) != 1 or not isinstance(node, exp.Count):
+                    raise unavailable("去重聚合只支持 COUNT(DISTINCT 对象.属性)")
+                arg = arg.expressions[0]
+            col = self.expression(arg, row=True)
+            if isinstance(node, exp.Count) and isinstance(arg, exp.Column) and isinstance(col.type, (Date, DateTime)):
+                self.count_times[col.key] = (f"{self.object.code}.{arg.name}", col)
             if not isinstance(node, exp.Count) and not isinstance(col.type, Numeric):
-                from sqlalchemy import Integer
-
                 if not isinstance(col.type, Integer):
                     raise unavailable("聚合属性必须绑定数值列")
             return {
@@ -295,16 +329,30 @@ class BoundFormula:
                 exp.Avg: func.avg,
                 exp.Min: func.min,
                 exp.Max: func.max,
-            }[type(node)](col)
+            }[type(node)](distinct(col) if dedup else col,
+                          type_=Numeric() if isinstance(node, exp.Avg) else
+                          Integer() if isinstance(node, exp.Count) else col.type)
+        if row and isinstance(node, exp.Column):
+            return self.column(node)
+        if row and isinstance(node, exp.Null):
+            return literal(None)
+        if row and isinstance(node, exp.Boolean):
+            return literal(bool(node.this))
+        if row and isinstance(node, exp.Literal) and node.is_string:
+            if len(node.this) > 256:
+                raise unavailable("公式文本常量最多256字")
+            return literal(node.this)
         if isinstance(node, exp.Literal) and not node.is_string:
             value = Decimal(node.this)
             if not value.is_finite() or abs(value) > Decimal("1e20"):
                 raise unavailable("公式常量超过可试算范围")
             return literal(value)
         if isinstance(node, exp.Neg):
-            return -self.expression(node.this)
+            return -self.numeric(self.expression(node.this, row=row))
         if isinstance(node, (exp.Add, exp.Sub, exp.Mul, exp.Div)):
-            left, right = self.expression(node.this), self.expression(node.expression)
+            left, right = self.expression(node.this, row=row), self.expression(node.expression, row=row)
+            self.numeric(left)
+            self.numeric(right)
             if isinstance(node, exp.Add):
                 return left + right
             if isinstance(node, exp.Sub):
@@ -312,13 +360,39 @@ class BoundFormula:
             if isinstance(node, exp.Mul):
                 return left * right
             return left / func.nullif(right, 0)
-        raise unavailable("公式尚不能确定执行含义；支持单对象SUM/COUNT/AVG/MIN/MAX及四则运算")
+        if isinstance(node, exp.Case):
+            if not row or node.this is not None or not 1 <= len(node.args.get("ifs") or []) <= 16:
+                raise unavailable("CASE 需使用1至16项显式 WHEN 条件")
+            clauses = [(self.predicate(item.this), self.expression(item.args["true"], row=row))
+                       for item in node.args["ifs"]]
+            default = self.expression(node.args["default"], row=row) if node.args.get("default") is not None else literal(None)
+            self.compatible([value for _, value in clauses] + [default])
+            return case(*clauses, else_=default)
+        if isinstance(node, exp.Coalesce):
+            args = [node.this, *node.expressions]
+            if not 2 <= len(args) <= 8:
+                raise unavailable("COALESCE 需2至8项")
+            values = [self.expression(item, row=row) for item in args]
+            self.compatible(values)
+            return func.coalesce(*values)
+        if isinstance(node, exp.Abs):
+            value = self.numeric(self.expression(node.this, row=row))
+            return func.abs(value, type_=value.type)
+        if isinstance(node, exp.Round):
+            from app.modules.static.metric_program import integer
+            precision = integer(node.args.get("decimals") or exp.Literal.number(0), 0, 12)
+            return func.round(cast(self.numeric(self.expression(node.this, row=row)), Numeric), precision)
+        raise unavailable("公式支持受控聚合、去重计数、CASE、COALESCE、ABS、ROUND与四则运算；跨对象请引用固定版本指标")
 
     def predicate(self, node):
         if isinstance(node, exp.Paren):
             return self.predicate(node.this)
         if isinstance(node, exp.And):
             return self.predicate(node.this) & self.predicate(node.expression)
+        if isinstance(node, exp.Or):
+            return self.predicate(node.this) | self.predicate(node.expression)
+        if isinstance(node, exp.Not):
+            return ~self.predicate(node.this)
         if not isinstance(node, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE)):
             raise unavailable("默认过滤尚不能确定执行含义；支持显式属性与标量比较")
         col = self.column(node.this)
@@ -515,6 +589,11 @@ async def metric_readiness(session, user: CurrentUser, code: str, *, ver=None, c
         metric = await metric_definition(session, code, user, ver, cr_id)
         if ver:
             raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
+        from app.modules.static import metric_program
+        if metric_program.is_program(parse_formula(metric.get("formula"))):
+            details = await program_details(session, user, metric)
+            return {"id": code, "ready": True, "hasTimeField": details["hasTimeField"],
+                    "program": True, "dependencies": details["dependencies"], "issues": []}
         objects = list(await session.scalars(select(ObjectType)))
         from app.common.sql_guard import ensure_governed_tables
 
@@ -527,7 +606,7 @@ async def metric_readiness(session, user: CurrentUser, code: str, *, ver=None, c
             session=session,
         )
     except AppError as error:
-        if error.code not in ("METRIC_TRIAL_UNAVAILABLE", "OBJECT_DATA_UNAVAILABLE"):
+        if error.code not in ("METRIC_TRIAL_UNAVAILABLE", "OBJECT_DATA_UNAVAILABLE", "METRIC_PROGRAM_INVALID"):
             raise
         return {
             "id": code,
@@ -536,6 +615,58 @@ async def metric_readiness(session, user: CurrentUser, code: str, *, ver=None, c
             or [{"reason": (error.details or {}).get("reason", error.code), "message": error.message}],
         }
     return {"id": code, "ready": True, "hasTimeField": temporal is not None, "issues": []}
+
+
+async def program_details(session, user, metric, trail=(), _state=None):
+    """Resolve fixed versions recursively without executing source queries."""
+    from app.modules.static import metric_program
+    from app.modules.governance.policy import enforce
+    from app.modules.static.lineage import identity
+    code = metric["id"]
+    await enforce(session, user, [identity("metric", code)], "read")
+    if code in trail or len(trail) >= metric_program.MAX_DEPTH:
+        raise metric_program.invalid("指标依赖存在循环或超过8层")
+    state = _state if _state is not None else {"calls": 0, "cache": {}}
+    if code in state["cache"]:
+        return state["cache"][code]
+    state["calls"] += 1
+    if state["calls"] > metric_program.MAX_CALLS:
+        raise metric_program.invalid("指标依赖超过32项，请拆分公式")
+    tree = parse_formula(metric["formula"])
+    metadata = {r.get("k"): r.get("v") for r in metric.get("def", []) if isinstance(r, dict)}
+    if metadata.get("时间字段") or metadata.get("默认过滤"):
+        raise metric_program.invalid("组合指标的时间字段和默认过滤由被引用口径定义，请在各引用指标中维护，不能在组合层忽略或覆盖")
+    refs = metric_program.references(tree)
+    objects = list(await session.scalars(select(ObjectType)))
+    from app.common.sql_guard import ensure_governed_tables
+    await ensure_governed_tables(session)
+    temporal, dependencies = True, []
+    for reference, version in refs:
+        rows = list(await session.scalars(select(Metric).where(
+            Metric.ontology_id == require_ontology_id(session),
+            (Metric.code == reference) | (Metric.api_name == reference),
+        )))
+        if len(rows) != 1 or rows[0].version != version or rows[0].status.value != "已发布":
+            raise metric_program.invalid(f"引用指标「{reference}」没有唯一匹配的已发布版本「{version}」")
+        child = await metric_definition(session, rows[0].code, user)
+        dependencies.append({"id": rows[0].code, "api": rows[0].api_name, "version": version})
+        child_tree = parse_formula(child["formula"])
+        if metric_program.is_program(child_tree):
+            info = await program_details(session, user, child, (*trail, code), state)
+            temporal = temporal and info["hasTimeField"]
+        else:
+            _, _, time_col, _, _ = compile_metric(
+                child, objects, require_ontology_id(session),
+                await execution_bindings(session, objects, child), session=session,
+            )
+            temporal = temporal and time_col is not None
+    if not temporal and any(metric_program.function_name(n) in {
+        "PREV", "WOW", "DELTA", "PCT_CHANGE", "MOVING_AVG", "MOVING_SUM", "RUNNING_SUM"
+    } for n in tree.walk()):
+        raise metric_program.invalid("窗口指标的全部引用必须有明确时间字段")
+    result = {"hasTimeField": temporal, "dependencies": dependencies}
+    state["cache"][code] = result
+    return result
 
 
 READINESS_BATCH_MAX = 200
@@ -571,10 +702,10 @@ async def metrics_readiness(session, user: CurrentUser, codes=None, *, ver=None,
     return {"total": len(items), "ready": sum(1 for x in items if x["ready"]), "items": items}
 
 
-def metric_window(days, *, at=None, timezone=None):
+def metric_window(days, *, at=None, timezone=None, max_days=93):
     """The same inclusive local-calendar window used by trial and QA published defaults."""
-    if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 93:
-        raise unavailable("试算范围须为1至93天")
+    if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= max_days:
+        raise unavailable(f"计算范围须为1至{max_days}天")
     tz = ZoneInfo(timezone or get_settings().display_tz)
     cutoff_at = at or clock.now()
     if cutoff_at.tzinfo is None:
@@ -589,6 +720,7 @@ def metric_window(days, *, at=None, timezone=None):
     )
 
 
+@bounded
 async def evaluate_metric(
     session,
     user: CurrentUser,
@@ -603,11 +735,19 @@ async def evaluate_metric(
     object_kind=None,
     object_identity=None,
     snapshot=False,
+    _history=False,
+    _visible_start=None,
 ) -> dict:
     """Public evaluator: exact saved definition + governed live rows, inclusive local calendar days."""
     check_func(user, "metrics", "view")
-    if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 93:
-        raise unavailable("试算范围须为1至93天")
+    from app.modules.governance.policy import enforce
+    from app.modules.static.lineage import identity
+    from app.modules.static import metric_program
+
+    await enforce(session, user, [identity("metric", code)], "aggregate", unmasked=True)
+    max_days = metric_program.MAX_HISTORY_DAYS if _history else 93
+    if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= max_days:
+        raise unavailable(f"计算范围须为1至{max_days}天")
     if period not in ("day", "week", "month", "none"):
         raise unavailable("试算分组仅支持整体、日、周或月")
     if object_identity is not None and (not object_kind or not isinstance(object_identity, str) or not 0 < len(object_identity) <= 64 or "\x00" in object_identity):
@@ -617,6 +757,37 @@ async def evaluate_metric(
     metric = await metric_definition(session, code, user, ver, cr_id)
     if ver:
         raise unavailable("该历史快照未保存完整执行映射，不能借用当前映射试算")
+    program_tree = parse_formula(metric.get("formula"))
+    if metric_program.is_program(program_tree):
+        await program_details(session, user, metric)
+        if snapshot and at is not None:
+            raise unavailable("当前快照不能计算历史状态")
+        window = metric_window(days, at=at, timezone=timezone, max_days=max_days)
+
+        async def load(reference, version, padding):
+            rows = list(await session.scalars(select(Metric).where(
+                Metric.ontology_id == require_ontology_id(session),
+                (Metric.code == reference) | (Metric.api_name == reference)
+            )))
+            if len(rows) != 1 or rows[0].status.value != "已发布" or rows[0].version != version:
+                raise metric_program.invalid(f"引用指标「{reference}」没有唯一匹配的已发布版本「{version}」")
+            history_days = days + padding
+            if not snapshot and period in {"week", "month"}:
+                lower = window[0] - timedelta(days=padding)
+                first = lower - timedelta(days=lower.weekday()) if period == "week" else lower.replace(day=1)
+                history_days += (lower - first).days
+            return await evaluate_metric(
+                session, user, rows[0].code, days=history_days, period=period, at=at,
+                timezone=timezone, object_kind=object_kind, object_identity=object_identity,
+                snapshot=snapshot, _history=True, _visible_start=_visible_start or window[2],
+            )
+
+        result = await metric_program.evaluate(
+            program_tree, load, period=period, snapshot=snapshot, start=window[0], end=window[1]
+        )
+        return {"id": code, "version": metric.get("version") or "草稿", "formula": metric["formula"],
+                "scope": "当前快照 · 固定版本指标组合" if snapshot else f"{window[0]} 至 {window[1]} · 固定版本指标组合",
+                "crId": cr_id, **result}
     objects = list(await session.scalars(select(ObjectType)))
     from app.common.sql_guard import ensure_governed_tables
 
@@ -652,7 +823,7 @@ async def evaluate_metric(
                 "rows": [{"date": "当前", "value": str(value) if value is not None else None}],
                 "dataCutoff": None, "scope": "当前快照 · 当前用户可见数据", "crId": cr_id, **source_metadata}
     cutoff_at = at or clock.now()
-    start, end, lo, hi = metric_window(days, at=cutoff_at, timezone=timezone)
+    start, end, lo, hi = metric_window(days, at=cutoff_at, timezone=timezone, max_days=max_days)
     tz = lo.tzinfo
     if isinstance(temporal.type, DateTime):
         day = cast(temporal.op("AT TIME ZONE")(str(tz)), Date)
@@ -660,6 +831,12 @@ async def evaluate_metric(
         day, lo, hi = temporal, start, end + timedelta(days=1)
     if period in ("month", "week"):
         day = cast(func.date_trunc(period, day), Date)
+        if _visible_start is not None:
+            visible = _visible_start.astimezone(tz)
+            first = visible.replace(day=1) if period == "month" else visible - timedelta(days=visible.weekday())
+            first = first.replace(hour=0, minute=0, second=0, microsecond=0)
+            conds.append(or_(temporal < (first if isinstance(temporal.type, DateTime) else first.date()),
+                             temporal >= (visible if isinstance(temporal.type, DateTime) else visible.date())))
     grouping = []
     binding = getattr(bound.governed, "binding", None)
     if object_kind:

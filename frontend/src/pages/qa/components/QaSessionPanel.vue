@@ -7,7 +7,7 @@
  */
 import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue';
 import { message } from 'ant-design-vue';
-import { PlusOutlined, SearchOutlined, EllipsisOutlined } from '@ant-design/icons-vue';
+import { PlusOutlined, SearchOutlined, EllipsisOutlined, FilterOutlined, DownOutlined } from '@ant-design/icons-vue';
 import { QA_TODAY, QA_FAVORITES } from '@/mock';
 import type { QaSession } from '@/mock/qa';
 import { useQaSession, errText } from '../useQaSession';
@@ -27,7 +27,7 @@ const emit = defineEmits<{ (e: 'panel', v: 'favorites'): void }>();
 const panelEl = ref<HTMLElement>();
 const allocatedEl = computed(() => panelEl.value?.parentElement);
 const paging = useAdaptivePageSize({
-  container: allocatedEl, rowHeight: 30, rowSelector: '.qa-ss-list .qa-ss-item', min: 5, max: 50,
+  container: allocatedEl, rowHeight: 38, rowSelector: '.qa-ss-list .qa-ss-item', min: 5, max: 50,
   reserve: () => {
     const panel = panelEl.value;
     if (!panel) return 220;
@@ -45,7 +45,7 @@ const paging = useAdaptivePageSize({
   observe: () => [...(panelEl.value?.children ?? [])].filter(child => !child.classList.contains('qa-ss-list')),
   onSizeChange: () => { page.value = 1; },
 });
-const pageSize = paging.size, pageMode = paging.mode;
+const pageSize = paging.size;
 const { sessions: mockList, activeId: active, newSession, real, live, detail, listTick, favTick, newSessionReal, creating } = useQaSession();
 /* 自动和手动条数都进入真实列表请求；不按已返回行数反推容器容量。 */
 const contextKey = () => { const c = currentApiContext(); return JSON.stringify([c.ontologyId, c.demoAs, c.ver, c.previewAs]); };
@@ -172,82 +172,124 @@ if (real) {
   watch([contextKey, live, favTick], loadShortcuts, { immediate: true });
 }
 onBeforeUnmount(() => { disposed = true; ++reqSeq; ++shortcutSeq; });
-const when = (date: string) => {
-  const d = new Date();
-  const today = real ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : QA_TODAY;
-  return date === today ? '今天' : date.slice(5);
+const dateString = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const todayString = () => (real ? dateString(new Date()) : QA_TODAY);
+const dayLabel = (date: string) => {
+  const today = todayString();
+  if (date === today) return '今天';
+  const yesterday = new Date(`${today}T00:00:00`);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (date === dateString(yesterday)) return '昨天';
+  return date.slice(5);
 };
+const groups = computed(() => {
+  const out: { label: string; items: QaSession[] }[] = [];
+  for (const s of rows.value) {
+    const label = dayLabel(s.date);
+    const last = out[out.length - 1];
+    if (last?.label === label) last.items.push(s);
+    else out.push({ label, items: [s] });
+  }
+  return out;
+});
+const rangeLabel = computed(() => RANGES.find((item) => item.value === range.value)?.label ?? '全部时间');
+const onRange = ({ key }: { key: string | number }) => { range.value = String(key); };
 // 改关键词或时间范围后回到第 1 页
 watch([kw, range], () => { if (page.value !== 1) page.value = 1; });
 </script>
 
 <template>
   <section ref="panelEl" class="panel qa-sessions">
-    <a-tooltip :title="reason"><a-button block :disabled="readonly" :loading="creating" @click="onNew"><template #icon><PlusOutlined /></template>新建会话</a-button></a-tooltip>
-    <div class="qa-ss-filter">
-      <a-input :value="kw" placeholder="搜索会话" allow-clear @change="(e: Event) => (kw = (e.target as HTMLInputElement).value)">
-        <template #prefix><SearchOutlined class="c-3" /></template>
-      </a-input>
-      <a-select v-model:value="range" :options="RANGES" class="qa-ss-range" />
-    </div>
-    <div class="qa-ss-head c-3"><span>历史会话</span><span v-if="!total" class="t-12">共 0 条</span></div>
-    <div class="qa-ss-list">
-      <div v-for="s in rows" :key="s.id" class="qa-ss-item"
-        :class="{ on: s.id === active, hold: menuId === s.id || delId === s.id, edit: editing === s.id }" :title="s.title" @click="select(s.id)">
-        <a-input v-if="editing === s.id" ref="editInput" v-model:value="draft" size="small" class="qa-ss-edit"
-          @press-enter="saveRename" @blur="saveRename" @keydown.esc="editing = ''" />
-        <template v-else>
-          <span class="qa-ss-title">{{ s.title }}</span>
-          <span class="t-12 c-3 num qa-ss-date" :title="s.date">{{ when(s.date) }}</span>
-          <a-popconfirm :open="delId === s.id" title="删除这个会话？" description="删除后不可恢复。"
-            ok-text="删除" cancel-text="取消" :ok-button-props="{ danger: true }" placement="right"
-            @confirm="doDelete(s.id)" @cancel="delId = ''" @open-change="(v: boolean) => { if (!v) delId = ''; }">
-            <a-dropdown :trigger="['click']" :open="menuId === s.id" @open-change="(v: boolean) => (menuId = v ? s.id : '')">
-              <a-button type="text" size="small" class="qa-ss-more" title="更多" :aria-label="`${s.title}的更多操作`" @click.stop><EllipsisOutlined /></a-button>
-              <template #overlay>
-                <a-menu @click="({ key }: { key: string }) => onMenu(s.id, key)">
-                  <a-menu-item key="rename">重命名</a-menu-item>
-                  <a-menu-item key="delete" danger>删除</a-menu-item>
-                </a-menu>
-              </template>
-            </a-dropdown>
-          </a-popconfirm>
+    <a-tooltip :title="reason">
+      <a-button block type="primary" class="qa-ss-new" :disabled="readonly" :loading="creating" @click="onNew">
+        <template #icon><PlusOutlined /></template>新建会话
+      </a-button>
+    </a-tooltip>
+    <a-input class="qa-ss-search" :value="kw" placeholder="搜索会话" allow-clear @change="(e: Event) => (kw = (e.target as HTMLInputElement).value)">
+      <template #prefix><SearchOutlined class="c-3" /></template>
+    </a-input>
+    <div class="qa-ss-head">
+      <span class="qa-ss-heading">历史会话<em v-if="total && pageCount <= 1" class="qa-ss-count">{{ total }}</em></span>
+      <a-dropdown :trigger="['click']" placement="bottomRight">
+        <button type="button" class="qa-ss-range" :aria-label="`时间范围：${rangeLabel}`">
+          <FilterOutlined /> {{ rangeLabel }}<DownOutlined class="qa-ss-caret" />
+        </button>
+        <template #overlay>
+          <a-menu :selected-keys="[range]" @click="onRange">
+            <a-menu-item v-for="r in RANGES" :key="r.value">{{ r.label }}</a-menu-item>
+          </a-menu>
         </template>
-      </div>
-      <div v-if="!rows.length" class="qa-ss-empty c-3">没有匹配的会话</div>
+      </a-dropdown>
     </div>
-    <div v-if="total" class="qa-ss-pager"><AppPagination v-model:page="pageModel" v-model:mode="pageMode" variant="simple" :total="total" :size="pageSize" :empty="false" /></div>
-    <div v-if="favTop.length" class="qa-ss-bottom">
-      <template v-if="favTop.length">
-        <div class="qa-ss-group c-3">常用问题<a @click="emit('panel', 'favorites')">管理</a></div>
-        <div v-for="s in favTop" :key="s" class="qa-ss-item" :title="s"><span class="qa-ss-title">{{ s }}</span></div>
+    <div class="qa-ss-list">
+      <template v-for="g in groups" :key="g.label">
+        <div class="qa-ss-day">{{ g.label }}</div>
+        <div v-for="s in g.items" :key="s.id" class="qa-ss-item"
+          :class="{ on: s.id === active, hold: menuId === s.id || delId === s.id, edit: editing === s.id }" :title="s.title" :aria-current="s.id === active ? 'true' : undefined" @click="select(s.id)">
+          <a-input v-if="editing === s.id" ref="editInput" v-model:value="draft" size="small" class="qa-ss-edit"
+            @press-enter="saveRename" @blur="saveRename" @keydown.esc="editing = ''" />
+          <template v-else>
+            <span class="qa-ss-title">{{ s.title }}</span>
+            <a-popconfirm :open="delId === s.id" title="删除这个会话？" description="删除后不可恢复。"
+              ok-text="删除" cancel-text="取消" :ok-button-props="{ danger: true }" placement="right"
+              @confirm="doDelete(s.id)" @cancel="delId = ''" @open-change="(v: boolean) => { if (!v) delId = ''; }">
+              <a-dropdown :trigger="['click']" :open="menuId === s.id" @open-change="(v: boolean) => (menuId = v ? s.id : '')">
+                <a-button type="text" size="small" class="qa-ss-more" title="更多" :aria-label="`${s.title}的更多操作`" @click.stop><EllipsisOutlined /></a-button>
+                <template #overlay>
+                  <a-menu @click="({ key }: { key: string }) => onMenu(s.id, key)">
+                    <a-menu-item key="rename">重命名</a-menu-item>
+                    <a-menu-item key="delete" danger>删除</a-menu-item>
+                  </a-menu>
+                </template>
+              </a-dropdown>
+            </a-popconfirm>
+          </template>
+        </div>
       </template>
+      <div v-if="!rows.length" class="qa-ss-empty">没有匹配的会话</div>
+    </div>
+    <div v-if="total && pageCount > 1" class="qa-ss-pager">
+      <AppPagination v-model:page="pageModel" variant="simple" :total="total" :size="pageSize" unit="个会话" :empty="false" />
+    </div>
+    <div v-if="favTop.length" class="qa-ss-bottom">
+      <div class="qa-ss-fav-head">常用问题<a @click="emit('panel', 'favorites')">管理</a></div>
+      <div v-for="s in favTop" :key="s" class="qa-ss-item" :title="s"><span class="qa-ss-title">{{ s }}</span></div>
     </div>
   </section>
 </template>
 
 <style scoped>
-.qa-sessions { width: 232px; min-height: 0; max-height: 100%; align-self: flex-start; flex: none; padding: 12px 8px; overflow-y: auto; overflow-x: hidden; }
-.qa-ss-filter { display: flex; gap: 4px; margin: 8px 0 4px; }
-.qa-ss-filter :deep(.ant-input-affix-wrapper) { flex: 1; min-width: 0; }
-.qa-ss-range { width: 96px; flex: none; }
-.qa-ss-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 8px 4px; }
+.qa-sessions { width: 236px; min-height: 0; max-height: 100%; align-self: flex-start; flex: none; padding: 12px 10px 10px; overflow-y: auto; overflow-x: hidden; border-radius: 8px; }
 .qa-sessions > * { flex-shrink: 0; }
+.qa-ss-new { height: 36px; border-radius: 6px; font-weight: 600; box-shadow: none; }
+.qa-ss-search { height: 32px; margin: 10px 0 0; border-color: transparent; border-radius: 6px; background: var(--g4); box-shadow: none; }
+.qa-ss-search:hover { border-color: transparent; background: var(--g5); }
+.qa-ss-search.ant-input-affix-wrapper-focused { border-color: var(--brand); background: var(--g1); box-shadow: none; }
+.qa-ss-search :deep(.ant-input) { background: transparent; }
+.qa-ss-search :deep(.ant-input::placeholder) { color: var(--g9); }
+.qa-ss-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 8px 4px; }
+.qa-ss-heading { color: var(--g9); font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
+.qa-ss-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; background: var(--g4); color: var(--g9); font-size: 12px; font-style: normal; font-weight: 400; font-variant-numeric: tabular-nums; }
+.qa-ss-range { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: var(--g9); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.qa-ss-range:hover { background: var(--g4); color: var(--g10); }
+.qa-ss-caret { font-size: 9px; opacity: 0.7; }
 .qa-ss-list { flex: none; min-width: 0; }
-.qa-ss-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--radius); cursor: pointer; }
-.qa-ss-list .qa-ss-item { display: grid; grid-template-columns: minmax(0, 1fr) 48px; }
+.qa-ss-day { padding: 10px 10px 4px; color: var(--g9); font-size: 12px; line-height: 18px; }
+.qa-ss-day:first-child { padding-top: 6px; }
+.qa-ss-item { position: relative; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 7px 8px 7px 16px; border-radius: 6px; color: var(--g9); cursor: pointer; transition: background 0.15s ease, color 0.15s ease; }
+.qa-ss-item:hover { background: var(--g4); color: var(--g10); }
+.qa-ss-item.on { background: var(--brand-bg); color: var(--g10); font-weight: 600; }
+.qa-ss-item.on::before { content: ""; position: absolute; left: 7px; top: 50%; width: 4px; height: 4px; margin-top: -2px; border-radius: 50%; background: var(--brand); }
 .qa-ss-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.qa-ss-date { grid-area: 1 / 2; text-align: right; white-space: nowrap; }
-.qa-ss-item:hover { background: var(--g3); }
-.qa-ss-item.on { background: var(--brand-bg); color: var(--brand); }
 .qa-ss-item.edit { padding: 2px 4px; }
-.qa-ss-edit { grid-column: 1 / -1; min-width: 0; }
-/* 菜单和日期共用固定格，悬停、键盘聚焦或菜单打开时不挤动标题。 */
-.qa-ss-more { grid-area: 1 / 2; justify-self: end; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px; padding: 0; opacity: 0; pointer-events: none; }
-.qa-ss-item:hover .qa-ss-more, .qa-ss-item.hold .qa-ss-more, .qa-ss-item:focus-within .qa-ss-more { opacity: 1; pointer-events: auto; }
-.qa-ss-item:hover .qa-ss-date, .qa-ss-item.hold .qa-ss-date, .qa-ss-item:focus-within .qa-ss-date { opacity: 0; }
-.qa-ss-empty { padding: 16px 8px; text-align: center; }
-.qa-ss-pager { padding: 4px 8px 0; }
-.qa-ss-group { display: flex; justify-content: space-between; padding: 8px 8px 4px; }
-.qa-ss-bottom { flex: none; border-top: var(--border); padding-top: 4px; }
+.qa-ss-edit { min-width: 0; }
+.qa-ss-more { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border-radius: 4px; color: var(--g9); opacity: 0; pointer-events: none; }
+.qa-ss-item:hover .qa-ss-more, .qa-ss-item.on .qa-ss-more, .qa-ss-item.hold .qa-ss-more, .qa-ss-item:focus-within .qa-ss-more { opacity: 1; pointer-events: auto; }
+.qa-ss-empty { padding: 28px 8px; color: var(--g9); font-size: 12px; text-align: center; }
+.qa-ss-pager { padding: 8px 4px 0; }
+.qa-ss-pager :deep(.pg) { min-height: 30px; gap: 2px; }
+.qa-ss-pager :deep(.pg > .t-12) { color: var(--g9); }
+.qa-ss-fav-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 4px; color: var(--g9); font-size: 12px; }
+.qa-ss-fav-head a { color: var(--brand); font-size: 12px; }
+.qa-ss-bottom { margin-top: 8px; border-top: 1px solid var(--g4); padding-top: 4px; }
 </style>

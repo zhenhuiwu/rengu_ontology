@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
-from app.modules.auto_ontology.introspect import SYSTEM_TABLES, Table, readable_table_stats
+from app.modules.auto_ontology.introspect import SYSTEM_TABLES, Table, mysql_catalog_columns, readable_table_stats
 from app.modules.auto_ontology.introspect import inspect_tables as inspect_connection_tables
 from app.modules.data.adapters import ConnectionTestResult
 
@@ -115,7 +115,7 @@ class TableInfo:
     rows: int
 
 
-def _engine(kind: str, cfg: dict[str, Any]) -> AsyncEngine | Engine:
+def _engine(kind: str, cfg: dict[str, Any], *, pooled: bool = False) -> AsyncEngine | Engine:
     host = cfg["host"]
     if not real_connect_enabled() and permitted(kind, cfg) and host == "localhost":
         host = "127.0.0.1"
@@ -137,6 +137,11 @@ def _engine(kind: str, cfg: dict[str, Any]) -> AsyncEngine | Engine:
     if kind == "达梦 DM8":
         if cfg.get("ssl"):
             raise RuntimeError("达梦驱动的 TLS 证书与主机名校验尚未配置，无法安全建立 TLS 连接")
+        if pooled:
+            # The CDC worker checks the same source every few hundred milliseconds;
+            # reusing its private pool avoids paying a full DM handshake per tick.
+            return create_engine(url, connect_args={"connection_timeout": CONNECT_TIMEOUT_S},
+                                 pool_size=4, max_overflow=4, pool_recycle=180)
         return create_engine(url, connect_args={"connection_timeout": CONNECT_TIMEOUT_S}, poolclass=NullPool)
     args: dict[str, Any] = (
         {
@@ -234,6 +239,11 @@ def err_text(e: BaseException, password: str | None) -> str:
             match = re.search(r"(?<!\d)-\d{3,6}(?!\d)", str(dm_error))
             code = match.group() if match else None
         return f"达梦{phase or '连接或只读操作'}失败{f'（错误代码 {code}）' if code else '，请检查连接与只读权限'}"
+    mysql_error = next((x for x in candidates if type(x).__module__.startswith(('asyncmy', 'pymysql'))), None)
+    if mysql_error is not None:
+        code = next((arg for arg in mysql_error.args if type(arg) is int and 1000 <= arg <= 4999), None)
+        hint = '；请检查源账号SELECT和视图元数据SHOW VIEW权限' if code in (1142, 1143) else ''
+        return f"MySQL{phase or '连接或只读操作'}失败{f'（错误代码 {code}）' if code else ''}{hint}"
     if phase:
         return f"{phase}失败，请检查连接与只读权限"
     if isinstance(e, DBAPIError):
@@ -278,13 +288,19 @@ def _list(conn: Connection, schemas: list[str] | None = None, *, names_only: boo
         if schema.lower() in SYSTEM_SCHEMAS or schema.lower().startswith("pg_"):
             continue
         names = [n for n in insp.get_table_names(schema=schema) if n not in SYSTEM_TABLES]
+        views = set()
+        if conn.dialect.name == "mysql":
+            views = {n for n in insp.get_view_names(schema=schema) if n not in SYSTEM_TABLES}
+            names = sorted(set(names) | views)
         readable = readable_table_stats(conn, schema)
         if readable is not None:
             names = [n for n in names if n in readable]
         if not names:
             continue
-        cols = {} if names_only else insp.get_multi_columns(schema=schema, filter_names=names)
-        comments = {} if names_only else insp.get_multi_table_comment(schema=schema, filter_names=names)
+        cols = ({} if names_only else mysql_catalog_columns(conn, schema, names)
+                if conn.dialect.name == "mysql" else insp.get_multi_columns(schema=schema, filter_names=names))
+        comment_names = [name for name in names if name not in views]
+        comments = {} if names_only or not comment_names else insp.get_multi_table_comment(schema=schema, filter_names=comment_names)
         rows = readable or {}
         for n in sorted(names):
             out.append(
@@ -337,3 +353,25 @@ async def inspect_tables(kind: str, cfg: dict[str, Any], schema: str, tables: li
     require_configured_schema(kind, cfg, [schema])
     async with asyncio.timeout(CONNECT_TIMEOUT_S * 3):
         return await _read(kind, cfg, lambda conn: inspect_connection_tables(conn, schema, tables), stage="读取元数据")
+
+
+def assert_unique_key(conn, schema: str, name: str, key: str):
+    """A view declaration is not a constraint: recheck NULL and duplicate keys in the read transaction."""
+    from sqlalchemy import column, func, select, table
+    if not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", value) for value in (schema, name, key)):
+        raise ValueError("视图唯一键或来源名称无效")
+    source = table(name, column(key), schema=schema)
+    field = source.c[key]
+    if conn.execute(select(field).where(field.is_(None)).limit(1)).first() is not None:
+        raise ValueError("视图声明唯一键包含空值，未发布镜像")
+    if conn.execute(select(field).group_by(field).having(func.count() > 1).limit(1)).first() is not None:
+        raise ValueError("视图声明唯一键存在重复，未发布镜像")
+
+
+async def validate_view_key(kind, cfg, schema, name, key):
+    require_configured_schema(kind, cfg, [schema])
+    try:
+        return await _read(kind, cfg, lambda conn: assert_unique_key(conn, schema, name, key), stage="验证视图唯一键")
+    except ValueError as exc:
+        from app.core.errors import AppError
+        raise AppError(str(exc), code="VIEW_KEY_NOT_UNIQUE", status_code=422) from None

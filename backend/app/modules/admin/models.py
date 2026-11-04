@@ -216,7 +216,7 @@ class SysRoleScope(IdMixin, CreatedColumnsMixin, SeedMarkMixin, Base):
     )
     seq: Mapped[int] = mapped_column(Integer, nullable=False, comment="角色内顺序")
     obj_type: Mapped[str] = mapped_column(String(64), nullable=False, comment="对象类型中文名（订单）")
-    prop: Mapped[str] = mapped_column(String(64), nullable=False, comment="权限依据属性（大区）")
+    prop: Mapped[str] = mapped_column(String(384), nullable=False, comment="权限依据属性或最多4跳关系路径")
     op: Mapped[str] = mapped_column(String(4), nullable=False, comment="= 或 ∈")
     values: Mapped[list] = mapped_column(JsonType, nullable=False, comment="取值 string[]")
 

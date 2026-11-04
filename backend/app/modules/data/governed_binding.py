@@ -1,7 +1,7 @@
 """Explicit local database bindings, validated every time they are loaded."""
 import re
 
-from sqlalchemy import Integer, MetaData, String, Table, select, text
+from sqlalchemy import Integer, MetaData, String, Table, inspect, select, text
 from sqlalchemy.engine import make_url
 from app.core.config import get_settings
 from app.core.errors import AppError
@@ -21,7 +21,7 @@ def policy_safe(value):
     return compact == "ontology_id=nullifcurrent_setting'rengu.ontology_id',true,''::bigint"
 
 
-async def inspect_table(session, name):
+async def inspect_table(session, name, *, inspector=None):
     import app.db.models  # noqa: F401
     if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", name) or name in Base.metadata.tables:
         raise invalid("只能绑定非平台的 public 业务表")
@@ -45,7 +45,7 @@ async def inspect_table(session, name):
         raise invalid("业务表必须仅配置标准工作空间隔离策略")
     conn = await session.connection()
     try:
-        table = await conn.run_sync(lambda sync: Table(name, MetaData(), autoload_with=sync))
+        table = await conn.run_sync(lambda sync: Table(name, MetaData(), autoload_with=inspector if inspector is not None else sync))
     except Exception:
         raise invalid("无法读取本机业务表结构") from None
     if not {'id', 'ontology_id'} <= set(table.c.keys()):
@@ -55,11 +55,17 @@ async def inspect_table(session, name):
     return table, frozenset(status[4])
 
 
-async def validate_binding(session, obj, name, reads, writes):
+async def validate_binding(session, obj, name, reads, writes, *, sources=None, database=None, inspector=None):
     if obj.status != ObjectStatus.published or obj.source_table not in (name, f"public.{name}") or not obj.datasource_name:
         raise invalid("对象须已发布并明确映射到此源表和数据连接")
-    source = await session.scalar(select(Datasource).where(Datasource.ontology_id == obj.ontology_id, (Datasource.code == obj.datasource_name) | (Datasource.name == obj.datasource_name)))
-    database = await session.scalar(text("SELECT current_database()"))
+    if sources is None:
+        source = await session.scalar(select(Datasource).where(Datasource.ontology_id == obj.ontology_id, (Datasource.code == obj.datasource_name) | (Datasource.name == obj.datasource_name)))
+    else:
+        matches = [source for source in sources if source.ontology_id == obj.ontology_id
+                   and obj.datasource_name in (source.code, source.name)]
+        source = matches[0] if len(matches) == 1 else None
+    if database is None:
+        database = await session.scalar(text("SELECT current_database()"))
     if not source or source.type != DsType.postgresql or source.database != database:
         raise invalid("仅支持与本应用同库的 PostgreSQL 数据源")
     try:
@@ -76,7 +82,7 @@ async def validate_binding(session, obj, name, reads, writes):
         raise invalid("字段配置无效")
     if len(set(reads)) != len(reads) or len(set(writes)) != len(writes) or not set(writes) <= set(reads):
         raise invalid("写字段须为读取字段的子集且不能重复")
-    table, update_columns = await inspect_table(session, name)
+    table, update_columns = await inspect_table(session, name, inspector=inspector)
     column = lambda p: p.backing_column or p.source_column
     from app.modules.qa.object_source import primary_property
     primary = primary_property(obj)
@@ -115,7 +121,7 @@ async def validate_binding(session, obj, name, reads, writes):
     return table
 
 
-async def validate_supplementary(session, obj, main, reads, spec):
+async def validate_supplementary(session, obj, main, reads, spec, *, inspector=None):
     """Validate an explicitly mapped 1:1 table on every save and load."""
     if not isinstance(spec, dict) or set(spec) != {"table", "mainKey", "joinKey", "fields"}:
         raise invalid("补充表配置不完整")
@@ -126,7 +132,7 @@ async def validate_supplementary(session, obj, main, reads, spec):
         raise invalid("主表关联字段须是已授权读取的字段，补充表须不同于主表")
     if not isinstance(fields, dict) or not fields or len(fields) > 100 or not all(isinstance(k, str) and isinstance(v, str) for k, v in fields.items()):
         raise invalid("请选择补充表字段映射")
-    table, _ = await inspect_table(session, name)
+    table, _ = await inspect_table(session, name, inspector=inspector)
     if join_key not in table.c or type(main.c[main_key].type) is not type(table.c[join_key].type):
         raise invalid("关联字段不存在或类型不一致")
     # Hold PostgreSQL ACCESS SHARE locks through validation and the caller's read transaction.
@@ -180,6 +186,21 @@ async def load_bindings(session, oid):
     if has_extra:
         stmt = stmt.options(undefer(GovernedBinding.supplementary))
     rows = list(await session.scalars(stmt))
+    objects = {obj.code: obj for obj in await session.scalars(
+        select(ObjectType).where(ObjectType.ontology_id == oid,
+                                 ObjectType.code.in_([row.object_code for row in rows]))
+    )} if rows else {}
+    labels = {obj.datasource_name for obj in objects.values() if obj.datasource_name}
+    sources = list(await session.scalars(select(Datasource).where(
+        Datasource.ontology_id == oid, Datasource.code.in_(labels) | Datasource.name.in_(labels)
+    ))) if labels else []
+    sources_by_name = {}
+    for source in sources:
+        for label in {source.code, source.name}:
+            sources_by_name.setdefault(label, []).append(source)
+    database = await session.scalar(text("SELECT current_database()")) if rows else None
+    conn = await session.connection() if rows else None
+    inspector = await conn.run_sync(inspect) if conn is not None else None
     main_tables = {row.table_name for row in rows}
     result = {}
     blocked = set()
@@ -188,26 +209,30 @@ async def load_bindings(session, oid):
     for row in rows:
         blocked.add(row.object_code)
         spec = row.supplementary if has_extra else None
-        obj = await session.scalar(select(ObjectType).where(ObjectType.ontology_id == oid, ObjectType.code == row.object_code))
+        obj = objects.get(row.object_code)
         if not obj:
             if spec:
                 invalid_extras.add(row.object_code)
             continue
         try:
-            table = await validate_binding(session, obj, row.table_name, row.read_columns, row.write_columns)
+            table = await validate_binding(
+                session, obj, row.table_name, row.read_columns, row.write_columns,
+                sources=sources_by_name.get(obj.datasource_name, []), database=database, inspector=inspector,
+            )
             allowed = set(row.read_columns) | {'id', 'ontology_id'}
             if row.write_columns:
                 allowed |= {'lock_version', 'updated_at'}
-            conn = await session.connection()
-            table = await conn.run_sync(lambda sync: Table(row.table_name, MetaData(), autoload_with=sync, include_columns=allowed, resolve_fks=False))
+            table = await conn.run_sync(lambda sync: Table(row.table_name, MetaData(), autoload_with=inspector, include_columns=allowed, resolve_fks=False))
             main = GovernedTable(table, row.object_code, {key: table.c[key] for key in row.read_columns}, ontology_id=oid, write_columns=frozenset(row.write_columns), projection=frozenset(row.read_columns))
             child = None
             if spec:
-                extra = await validate_supplementary(session, obj, table, row.read_columns, spec)
+                extra = await validate_supplementary(
+                    session, obj, table, row.read_columns, spec, inspector=inspector,
+                )
                 if extra.name in result or extra.name in main_tables:
                     raise invalid("补充表已绑定其他对象")
                 cols = set(spec["fields"].values()) | {spec["joinKey"], "ontology_id"}
-                extra = await conn.run_sync(lambda sync: Table(extra.name, MetaData(), autoload_with=sync, include_columns=cols, resolve_fks=False))
+                extra = await conn.run_sync(lambda sync: Table(extra.name, MetaData(), autoload_with=inspector, include_columns=cols, resolve_fks=False))
                 child = GovernedTable(extra, row.object_code, {}, inherit=InheritVia(local=extra.c[spec["joinKey"]], parent=main, parent_key=table.c[spec["mainKey"]]), ontology_id=oid, projection=frozenset(set(spec["fields"].values()) | {spec["joinKey"]}))
                 extras[row.object_code] = (spec, child)
             result[row.table_name] = main

@@ -3,10 +3,10 @@
 from sqlalchemy import select
 
 from app.common.auth import check_func
-from app.common.ontology import require_ontology_id
 from app.core.errors import AppError
 from app.modules.static import shapes
-from app.modules.static.metric_trial import compile_metric, execution_bindings, metric_definition
+from app.modules.static.metric_trial import metric_definition
+from app.modules.static.metric_validation import validate_metric_definition
 from app.modules.static.models import ObjectType
 from app.modules.static.writeback import _prop_type
 
@@ -122,16 +122,7 @@ async def release_readiness(session, cr, targets, items, user):
         try:
             check_func(user, "metrics", "view")
             definition = await metric_definition(session, target.target_id, user, cr_id=cr.code)
-            from app.common.sql_guard import ensure_governed_tables
-
-            await ensure_governed_tables(session)
-            compile_metric(
-                definition,
-                objects,
-                require_ontology_id(session),
-                await execution_bindings(session, objects, definition),
-                session=session,
-            )
+            await validate_metric_definition(session, user, definition, objects)
         except AppError as error:
             mapping_errors = {
                 "OBJECT_NOT_FOUND",
@@ -142,7 +133,8 @@ async def release_readiness(session, cr, targets, items, user):
             }
             issues = (error.details or {}).get("issues") or []
             blocked = (
-                any(issue.get("reason") in mapping_errors for issue in issues) or error.status_code == 404
+                any(issue.get("reason") in mapping_errors for issue in issues)
+                or error.status_code in (403, 404) or error.code == "METRIC_PROGRAM_INVALID"
             )
             metric_results.append(
                 (
@@ -154,7 +146,7 @@ async def release_readiness(session, cr, targets, items, user):
             metric_results.append(
                 (
                     "通过",
-                    f"{target.target_id}：已按当前本体及本单指标草稿核对对象、属性、时间和过滤映射；未执行源查询或EXPLAIN",
+                    f"{target.target_id}：已按当前本体及本单指标草稿核对定义、固定版本引用和执行映射；未执行源查询或EXPLAIN",
                 )
             )
     if metric_results:

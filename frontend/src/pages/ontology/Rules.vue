@@ -28,7 +28,7 @@ import { alertTimeline } from '@/mock/dynamic';
 import { metricById as mockMetricById } from '@/mock/metrics';
 import { METRIC_LIST } from '@/mock/metricCatalog';
 import { ACTIONS } from '@/mock/actions';
-import { actionApi, actionTypes, eventTypes, paramsOf, loadActionParams, loadSnapshot, actionContextKey } from '@/api/action';
+import { actionApi, actionTypes, eventTypes, paramsOf, loadActionParams, loadSnapshot, snapshotReady, actionContextKey } from '@/api/action';
 import { isStaticReal, loadStatic, getObjectTypeMeta, OBJECT_TYPE_LIST } from '@/api/static';
 import {
   RULE_DEFS, RULE_DRAFTS, CONFIRMERS, MAPPING_SOURCES, hitsOf, stagedOf, replay, ruleVersions, objKindLabel, dedupeReason,
@@ -42,7 +42,7 @@ import { useAppStore } from '@/stores/app';
 import { CHANGE_REQUESTS } from '@/mock/changes';
 import type { ActionRecord } from '@/mock/actions';
 import type { Alert } from '@/mock/dynamic';
-import { isApiError } from '@/api/http';
+import { currentApiContext, isApiError } from '@/api/http';
 import {
   dynamicApi, dynamicContextKey, listRules, getRule, getRulesMeta, saveRuleDraft, createRule, openRuleDraft, discardRuleDraft, removeCRTarget, CR_WRITE, crOpen, crDropEmpty, crErrText, listRuleHits, getRuleHit, replayRule, listRuleVersions, listRuleActionRuns, getRuleVersionSnapshot, restoreRuleVersion,
   type RuleDto, type RuleHitDetailDto, type ReplayDto, type RuleVersionDto, type HitDim, type ReplaySampleDto,
@@ -53,13 +53,19 @@ import {
 const REAL_API = dynamicApi.isReal();
 /* 目录（动作类型 / 事件类型 / 指标）：action、static 开关各自切到真接口时读它们的接口（只读，src/api/action.ts、static.ts），否则读 mock */
 const catTick = ref(0);
-if (actionApi.isReal()) watch(actionContextKey, () => { const key = actionContextKey(); loadSnapshot().then(() => { if (key === actionContextKey()) catTick.value += 1; }, (e) => { if (key === actionContextKey()) console.error('[api] 动作 / 事件类型目录加载失败', e); }); }, { immediate: true });
-if (isStaticReal()) watch(dynamicContextKey, () => { const key = dynamicContextKey(); loadStatic(['metrics', 'objects']).then(() => { if (key === dynamicContextKey()) catTick.value += 1; }, (e) => { if (key === dynamicContextKey() && !fallBackIfDown(e)) console.error('[api] 指标目录加载失败', e); }); }, { immediate: true });
+const catalogKey = ref('');
+const actionCatalogReady = computed(() => !actionApi.isReal() || catalogKey.value === actionContextKey() && snapshotReady());
+if (isStaticReal()) watch(dynamicContextKey, () => {
+  // Current real rules already receive object/metric labels in rules/meta; retain historical/mock catalogs.
+  if (REAL_API && !currentApiContext().ver) return;
+  const key = dynamicContextKey(); loadStatic(['metrics', 'objects']).then(() => { if (key === dynamicContextKey()) catTick.value += 1; }, (e) => { if (key === dynamicContextKey() && !fallBackIfDown(e)) console.error('[api] 指标目录加载失败', e); });
+}, { immediate: true });
 const actionTypeById = (id: string) => { void catTick.value; return actionTypes().find((a) => a.id === id); };
 const eventTypeById = (id: string) => { void catTick.value; return eventTypes().find((e) => e.id === id); };
 const metricById = (id: string): { name: string } | undefined => {
   void catTick.value;
-  return isStaticReal() ? METRIC_LIST.find((m) => m.id === id) : mockMetricById(id);
+  return REAL_API && !currentApiContext().ver ? remote.meta.metrics.find(m => m.id === id)
+    : isStaticReal() ? METRIC_LIST.find((m) => m.id === id) : mockMetricById(id);
 };
 /** 真接口失败保留明确错误，不切换为演示规则。 */
 const live = computed(() => REAL_API);
@@ -289,6 +295,7 @@ function receiveAssistantPrefill(notify = false) {
   resolveAssistantObject();
 }
 function resolveAssistantObject() {
+  if (actionApi.isReal() && !actionCatalogReady.value) return;
   if (!assistantNew.value || !newOpen.value || assistantPage !== route.fullPath || assistantContext !== dynamicContextKey() || assistantForm !== JSON.stringify(newForm) || newForm.objKind) return;
   const value = assistantText(assistantNew.value, 'objKind');
   const matches = remote.meta.objects.filter(o => [o.id, o.name, o.api].includes(value));
@@ -304,10 +311,11 @@ function resolveAssistantObject() {
 function onAssistantEvent(event: Event) { if ((event as CustomEvent).detail?.target === 'rule') receiveAssistantPrefill(true); }
 onMounted(() => { window.addEventListener('assistant-prefill', onAssistantEvent); receiveAssistantPrefill(); });
 onScopeDispose(() => window.removeEventListener('assistant-prefill', onAssistantEvent));
-watch(() => remote.meta.objects, resolveAssistantObject);
-watch([() => remote.detail, () => assistantPending.value, () => remote.meta.events, () => draftDef.value], () => {
+watch([() => remote.meta.objects, catTick], resolveAssistantObject);
+watch([() => remote.detail, () => assistantPending.value, () => remote.meta.events, () => draftDef.value, catTick], () => {
   const pending = assistantPending.value, detail = remote.detail;
   if (!pending || !detail || detail.id !== pending.id || !detail.draft || !draftDef.value) return;
+  if (actionApi.isReal() && !actionCatalogReady.value) return;
   if (edits[pending.id]) { assistantPending.value = null; return; }
   const draft = pending.draft, edit = ensureEdits(), kind = assistantText(draft, 'triggerKind');
   if (kind === '事件') {
@@ -348,6 +356,7 @@ const metricBumped = computed(() => {
 });
 async function saveDraft() {
   if (!isDraft.value || !draftDef.value || readonly.value || savingDraft.value) return;
+  if (!stageParametersReady.value) { message.warning('请等待动作参数加载完成后保存'); return; }
   const cr = draftCR.value!;
   const id = base.value.id, ctx = dynamicContextKey(), seq = definitionSeq;
   if (REAL_API) {
@@ -389,16 +398,33 @@ const stageEdit = computed(() => (isDraft.value && draftDef.value ? ensureEdits(
 const stageType = computed(() => (stageEdit.value.actionTypeId ? actionTypeById(stageEdit.value.actionTypeId) : undefined));
 const actOptions = computed(() => { void catTick.value; return actionTypes().filter((a) => a.targetKind === rule.value.objKind && a.status !== '草稿').map((a) => ({ value: a.id, label: `${a.name} · ${a.version}` })); });
 const params = computed(() => (stageType.value ? paramsOf(stageType.value) : []));
-if (actionApi.isReal()) watch([actionContextKey, () => stageType.value?.id], async () => {
-  const id = stageType.value?.id, key = actionContextKey();
-  if (!id) return;
-  try { await loadActionParams(id); }
-  catch (e) { if (mounted && key === actionContextKey() && id === stageType.value?.id) fail(e); }
+const paramsKey = ref('');
+const stageParametersReady = computed(() => !actionApi.isReal() || !isDraft.value || !stageEdit.value.enabled || !stageEdit.value.actionTypeId || paramsKey.value === `${actionContextKey()}:${stageEdit.value.actionTypeId}:${stageType.value?.version}`);
+function needsActionCatalog() {
+  return !REAL_API || tab.value === 'action' || tab.value === 'trigger' && rule.value.trigger.kind === '事件'
+    || isDraft.value && stageEdit.value.enabled || newOpen.value && !!assistantNew.value || !!assistantPending.value;
+}
+let catalogSequence = 0, parameterSequence = 0;
+function watchRuleCatalog() {
+  return watch([actionContextKey, needsActionCatalog], async ([key, needed]) => {
+    const sequence = ++catalogSequence;
+    if (!needed) return;
+    try { await loadSnapshot(); if (mounted && sequence === catalogSequence && key === actionContextKey()) { catalogKey.value = key; catTick.value++; } }
+    catch (e) { if (mounted && sequence === catalogSequence && key === actionContextKey()) fail(e); }
+  }, { immediate: true });
+}
+if (actionApi.isReal()) watchRuleCatalog();
+if (actionApi.isReal()) watch([actionContextKey, () => stageType.value?.id, () => stageType.value?.version, () => needsActionCatalog() && actionCatalogReady.value], async () => {
+  const sequence = ++parameterSequence;
+  const id = stageType.value?.id, version = stageType.value?.version, key = actionContextKey();
+  if (!id || !needsActionCatalog() || !actionCatalogReady.value) return;
+  try { await loadActionParams(id); if (mounted && sequence === parameterSequence && key === actionContextKey() && id === stageType.value?.id && version === stageType.value?.version) paramsKey.value = `${key}:${id}:${version}`; }
+  catch (e) { if (mounted && sequence === parameterSequence && key === actionContextKey() && id === stageType.value?.id) fail(e); }
 }, { immediate: true, flush: 'sync' });
 const mappingRows = computed(() => params.value.map((p) => ({ param: p.name, required: p.required, from: stageEdit.value.mapping.find((m) => m.param === p.name)?.from ?? '' })));
 /** 自动暂存开启时，必填参数（*）都要有取值来源才能保存 */
 const missingReq = computed(() => (isDraft.value && stageEdit.value.enabled ? mappingRows.value.filter((r) => r.required && !r.from).map((r) => r.param) : []));
-const saveTip = computed(() => (missingReq.value.length ? `自动暂存动作缺少必填参数的取值来源：${missingReq.value.join('、')}` : ''));
+const saveTip = computed(() => !stageParametersReady.value ? '动作参数加载中，完成后可保存' : missingReq.value.length ? `自动暂存动作缺少必填参数的取值来源：${missingReq.value.join('、')}` : '');
 function setMapping(param: string, from: string) {
   const m = ensureEdits().autoStage.mapping; const row = m.find((x) => x.param === param);
   if (row) row.from = from; else m.push({ param, from });
@@ -575,9 +601,20 @@ const guard = <T,>(key: () => string, run: () => Promise<T>, set: (v: T) => void
 const loadDetail = guard(() => realId.value, () => getRule(realId.value), (v) => { remote.detail = v; }, () => { remote.detail = null; });
 const loadOverview = guard(() => realId.value, async () => {
   const id = realId.value;
-  const [h7, rec, vers, st] = await Promise.all([listRuleHits(id, '7d', 1, 1), listRuleHits(id, '30d', 1, 5), listRuleVersions(id), listRuleActionRuns(id)]);
-  return { h7: h7.total, rec: rec.items, vers, st: st.items as unknown as ActionRecord[] };
-}, (v) => { remote.hits7 = v.h7; remote.recent = v.rec; remote.versions = v.vers; remote.staged = v.st; });
+  const [h7, rec] = await Promise.all([listRuleHits(id, '7d', 1, 1), listRuleHits(id, '30d', 1, 5)]);
+  return { h7: h7.total, rec: rec.items };
+}, (v) => { remote.hits7 = v.h7; remote.recent = v.rec; });
+const ruleTabDataKey = () => remote.detail?.id === realId.value
+  ? JSON.stringify([realId.value, remote.detail.version, remote.detail.draft?.version, remote.detail.displayStatus, remote.detail.cr]) : '';
+const loadStaged = guard(() => tab.value === 'action' ? ruleTabDataKey() : '',
+  () => listRuleActionRuns(realId.value), v => { remote.staged = v.items as unknown as ActionRecord[]; },
+  () => { remote.staged = []; });
+const loadVersions = guard(() => tab.value === 'versions' ? ruleTabDataKey() : '',
+  () => listRuleVersions(realId.value), v => { remote.versions = v; }, () => { remote.versions = []; });
+function watchRuleTabData() {
+  return watch([dynamicContextKey, realId, tab, ruleTabDataKey], () => { void loadStaged(); void loadVersions(); },
+    { immediate: true, flush: 'sync' });
+}
 const loadHits = guard(() => (tab.value === 'hits' && realId.value ? `${realId.value}|${hrange.value}|${hq.page.value}|${hq.size.value}` : ''), () => listRuleHits(realId.value, hrange.value as '7d' | '30d', hq.page.value, hq.size.value), (v) => { remote.hits = v; if (v.page && v.page !== hq.page.value) hq.page.value = v.page; });
 const loadHit = guard(() => q('hit'), () => getRuleHit(q('hit')), (v) => { remote.hit = v as RuleHitDetailDto; }, () => { remote.hit = null; });
 if (live.value) {
@@ -586,6 +623,7 @@ if (live.value) {
   watch(dynamicContextKey, loadMeta, { immediate: true, flush: 'sync' });
   watch([dynamicContextKey, kw, trig, stf, lpage], loadList, { immediate: true, flush: 'sync' });
   watch([dynamicContextKey, realId], () => { ++definitionSeq; remote.detail = null; remote.hits = { items: [], total: 0 }; remote.recent = []; remote.hits7 = 0; remote.hit = null; remote.replay = null; ++replaySeq; running.value = false; savingDraft.value = false; saveError.value = ''; remote.versions = []; remote.staged = []; loadDetail(); loadOverview(); }, { immediate: true, flush: 'sync' });
+  watchRuleTabData();
   watch([dynamicContextKey, realId, tab, hrange, hq.page, hq.size], loadHits, { immediate: true, flush: 'sync' });
   watch([dynamicContextKey, () => q('hit')], loadHit, { immediate: true, flush: 'sync' });
   watch([dynamicContextKey, ran, replayKey, () => remote.detail?.id], () => { if (ran.value && remote.detail?.id === realId.value && remote.replay?.k !== replayKey.value) fetchReplay(); }, { immediate: true, flush: 'sync' });
@@ -619,21 +657,21 @@ const deletion = useDefinitionDelete('rule', {
   </Teleport>
 
   <div class="ru">
-    <div class="panel ru-list">
+    <div class="panel ru-list side-list">
       <div class="ru-filter">
         <a-input-search v-model:value="kw" placeholder="搜索名称" class="ru-kw" />
         <a-select v-model:value="trig" :options="['全部', '定时', '事件'].map((g) => ({ value: g, label: g === '全部' ? '全部触发' : g }))" class="ru-sel" />
         <a-select v-model:value="stf" :options="STATUS_OPTS" class="ru-sel" />
       </div>
-      <ul class="ru-items">
-        <li v-for="r in list" :key="r.id" :class="{ active: r.id === base.id }" @click="pick(r.id)">
-          <div class="ru-row" :title="`${r.id} · ${r.trigger.kind} · ${objectKindLabel(r.objKind)} · ${r.output}`">
-            <span class="t-14 ru-name">{{ r.name }}</span>
-            <span class="t-12 num ru-meta"><span v-if="r.status !== '已发布'" :class="ruleStatus(r).badge === 'warning' ? 'tl-attention' : 'c-2'">{{ ruleStatus(r).text }} · </span><span class="c-1">v{{ r.version }}</span></span>
+      <ul class="ru-items side-list-items">
+        <li v-for="r in list" :key="r.id" class="side-list-item" :class="{ active: r.id === base.id }" @click="pick(r.id)">
+          <div class="ru-row side-list-row" :title="`${r.id} · ${r.trigger.kind} · ${objectKindLabel(r.objKind)} · ${r.output}`">
+            <span class="t-14 ru-name side-list-name">{{ r.name }}</span>
+            <span class="t-12 num ru-meta side-list-meta"><span v-if="r.status !== '已发布'" :class="ruleStatus(r).badge === 'warning' ? 'tl-attention' : 'c-2'">{{ ruleStatus(r).text }} · </span><span class="c-1">v{{ r.version }}</span></span>
           </div>
         </li>
       </ul>
-      <div class="ru-foot">
+      <div class="ru-foot side-list-foot">
         <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" unit="条规则" class="ru-pager" empty-text="没有匹配的规则" />
       </div>
     </div>
@@ -653,7 +691,7 @@ const deletion = useDefinitionDelete('rule', {
         <a-tooltip :title="readonly ? reason : isDraft ? saveTip : ''">
           <a-button v-if="!draftCR || readonly" type="primary" :loading="openingEdit" :disabled="readonly" @click="openChange(`${base.name}（${base.id}）`)">编辑规则</a-button>
           <a-button v-else-if="!isDraft" type="primary" @click="setView('draft')">继续编辑</a-button>
-          <a-button v-else type="primary" :loading="savingDraft" :disabled="missingReq.length > 0 || !draftDef || (live && !definitionEditable)" @click="saveDraft">保存并生效</a-button>
+          <a-button v-else type="primary" :loading="savingDraft" :disabled="!stageParametersReady || missingReq.length > 0 || !draftDef || (live && !definitionEditable)" @click="saveDraft">保存并生效</a-button>
         </a-tooltip>
         <span v-if="!readonly && missingReq.length" class="t-12 c-warning">缺少必填参数：{{ missingReq.join('、') }}</span>
       </div>
@@ -957,20 +995,15 @@ const deletion = useDefinitionDelete('rule', {
 
 <style scoped>
 .ru { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.ru-list { width: 300px; flex: none; }
+.ru-list { flex: none; }
 .ru-filter { padding: 12px 12px 8px; display: flex; flex-wrap: wrap; gap: 8px; flex: none; }
 .ru-kw { flex: 1 1 100%; min-width: 0; }
 .ru-sel { flex: 1; min-width: 0; }
-.ru-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
-.ru-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
-.ru-items li:hover { background: var(--g3); }
-.ru-items li.active { background: var(--brand-bg); }
-.ru-items li.active .ru-name { color: var(--brand); }
+.ru-items { flex: 1; min-height: 0; }
 .ru-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ru-meta { flex: none; }
 .ru-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .ru-pager { flex: 1; min-height: 0; }
-.ru-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; }
 .ru-detail { flex: 1; min-width: 0; }
 .ru-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
 .ru-sp { flex: 1; }

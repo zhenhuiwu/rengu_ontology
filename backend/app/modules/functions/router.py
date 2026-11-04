@@ -5,6 +5,7 @@ import time
 from fastapi import APIRouter, Depends, Query
 
 from app.common.auth import CurrentUserDep, require_func
+from app.common.ontology import require_ontology_id
 from app.common.pagination import PageParams
 from app.core import clock
 from app.core.errors import AppError
@@ -12,6 +13,8 @@ from app.core.schema import _fmt_dt_seconds
 from app.db.session import SessionDep
 from app.modules.admin.api_keys import require_api_scope
 from app.modules.functions import runtime, service
+from app.modules.functions.executor import authorize, invoke_snapshot
+from app.modules.functions.remote import targets
 from app.modules.functions.schemas import CreateIn, RollbackIn, SaveIn, TestIn
 
 router = APIRouter(tags=["functions"], dependencies=[Depends(require_func("functions", "view"))])
@@ -54,10 +57,16 @@ async def versions(
     "/functions/{code}:test",
     dependencies=[Depends(require_api_scope("functions:invoke", function_type="{code}"))],
 )
-async def test_function(code: str, body: TestIn, session: SessionDep) -> dict:
+async def test_function(code: str, body: TestIn, session: SessionDep, user: CurrentUserDep) -> dict:
     fn = await service.detail(session, path_code(code))
     start = time.perf_counter()
-    output = runtime.run(fn["code"], fn["name"], body.input, fn["timeoutS"])
+    if body.version:
+        from app.contracts.functions import invoke_version
+        output = await invoke_version(session, user, code, body.version, body.input, strict_local=False)
+    else:
+        await authorize(session, user, code)
+        output = await invoke_snapshot(fn, body.input, ontology_id=require_ontology_id(session),
+                                       code=code, version=fn["version"])
     return {
         "output": output,
         "ms": max(0, round((time.perf_counter() - start) * 1000)),
@@ -73,6 +82,11 @@ async def rollback(code: str, body: RollbackIn, session: SessionDep, user: Curre
 @router.put("/functions/{code}", dependencies=[Manage])
 async def update_function(code: str, body: SaveIn, session: SessionDep, user: CurrentUserDep) -> dict:
     return await service.save(session, user, body, path_code(code))
+
+
+@router.get("/function-targets", dependencies=[Depends(require_api_scope("meta:read"))])
+async def function_targets(session: SessionDep) -> dict:
+    return {"items": [target.public() for target in targets(require_ontology_id(session))]}
 
 
 @router.get("/functions/{code}")

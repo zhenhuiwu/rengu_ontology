@@ -38,6 +38,7 @@ const listTick = ref(0);
 const favTick = ref(0);
 let loadSeq = 0, sendSeq = 0, createSeq = 0;
 let detailRequest: AbortController | undefined;
+let sendRequest: AbortController | undefined;
 const creating = ref(false);
 
 export const errText = (e: unknown) => (isApiError(e) ? `${e.message || e.code}（${e.code}）` : String(e));
@@ -62,11 +63,11 @@ const draft = ref('');
 export const chartRequests = ref<Record<string, { type: 'bar' | 'line' }>>({});
 if (real) {
   watch(contextKey, () => {
-    ++loadSeq; ++sendSeq; ++createSeq; detailRequest?.abort();
+    ++loadSeq; ++sendSeq; ++createSeq; detailRequest?.abort(); sendRequest?.abort();
     detail.value = null; activeId.value = ''; draft.value = ''; sessions.value = []; turns.value = {}; chartRequests.value = {}; listTick.value++; favTick.value++;
-    loading.value = false; sending.value = false; creating.value = false; sendError.value = '';
+    loading.value = false; sending.value = false; creating.value = false; sendError.value = ''; streamStatus.value = '';
   }, { flush: 'sync' });
-  watch(activeId, () => { ++loadSeq; detailRequest?.abort(); loading.value = false; ++sendSeq; sending.value = false; draft.value = ''; sendError.value = ''; }, { flush: 'sync' });
+  watch(activeId, () => { ++loadSeq; detailRequest?.abort(); loading.value = false; ++sendSeq; sendRequest?.abort(); sending.value = false; draft.value = ''; sendError.value = ''; streamStatus.value = ''; }, { flush: 'sync' });
   watch([activeId, live], ([id, on]) => {
     if (!on || !id || detail.value?.id !== id) void loadDetail(id);
   }, { immediate: true });
@@ -93,18 +94,21 @@ export function useQaSession() {
     const sid = activeId.value, key = contextKey();
     if (!sid || sending.value) return false;
     const my = ++sendSeq;
-    const valid = () => my === sendSeq && sid === activeId.value && key === contextKey();
+    sendRequest?.abort();
+    const request = new AbortController(); sendRequest = request;
+    const valid = () => my === sendSeq && sid === activeId.value && key === contextKey() && !request.signal.aborted;
     sending.value = true;
     sendError.value = '';
     draft.value = '';
     try {
-      // W7：先走 SSE（阶段提示实时更新），后台没有流 / 流断了没拿到 done → 回退 W6 同步接口
+      // Fall back only when the stream route/method definitively did not accept the ask.
       let r: qaApi.QaAskOut;
       try {
-        r = await qaApi.askTurnStream(sid, q, (e) => { if (valid() && e.event === 'status') streamStatus.value = String(e.data?.text ?? ''); });
+        r = await qaApi.askTurnStream(sid, q, (e) => { if (valid() && e.event === 'status') streamStatus.value = String(e.data?.text ?? ''); }, request.signal);
       } catch (e) {
         if (!(e instanceof qaApi.QaStreamUnsupported)) throw e;
-        r = await qaApi.askTurn(sid, q, qaApi.qaRequestOptions());
+        if (!valid()) return false;
+        r = await qaApi.askTurn(sid, q, qaApi.qaRequestOptions(request.signal));
       }
       if (!valid()) return false;
       if (detail.value?.id === sid) {
@@ -116,7 +120,10 @@ export function useQaSession() {
     } catch (e) {
       if (valid()) { draft.value = q; sendError.value = `提问失败：${errText(e)}`; message.error(sendError.value); }
       return false;
-    } finally { if (valid()) { sending.value = false; streamStatus.value = ''; } }
+    } finally {
+      if (valid()) { sending.value = false; streamStatus.value = ''; }
+      if (sendRequest === request) sendRequest = undefined;
+    }
   }
   function send(text?: string) {
     const q = (text ?? draft.value).trim();

@@ -9,10 +9,12 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Header, Query, Response
+from anyio import CancelScope
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError
@@ -387,24 +389,27 @@ async def _ask_once(session, conn, llm, user, ctx, pk: int, sid: str, body: AskI
 @router.post(
     "/sessions/{sid}/turns:stream",
     dependencies=_WB,
-    summary="W7 提问（SSE 实时推 status 阶段 + 回答事件；失败时前端回退 W6）",
+    summary="W7 提问（实时阶段与已持久化回答；仅接口不支持时回退同步提问）",
     response_class=StreamingResponse,
 )
 async def ask_stream(
     sid: str,
     body: AskIn,
+    request: Request,
     user: CurrentUserDep,
     ctx: ViewContextDep,
     llm: Annotated[LLMClient, Depends(get_llm)],
     session: Annotated[AsyncSession, Depends(db_session, scope="request")],
     opener: Annotated[Callable, Depends(chain.qa_conn_opener)],
 ):
-    """会话依赖用 request 作用域：响应流完之后才提交 / 关闭（流里还要落轮次）；连接在流里自己开。
+    """会话依赖用 request 作用域；缓存回答事件并提交轮次后才发送终态，连接在流里自己开。
 
-    事件：`status`（实时，无 id）→ 回答事件（先写 qa_turn_event 再推，带 id）→ `done`；
-    出错推 `error` + `done(failed)`。
+    事件：`status`（实时，无 id）→ 已提交的回答事件（带 id）→ `done`；
+    出错先回滚再推 `error` + `done(failed)`；断连时取消并等待工作任务，避免使用已关闭的会话。
     """
     await set_ontology_scope(session, user.ontology_id)
+    from app.modules.governance.query_guard import bind_request_context, request_session
+    bind_request_context(session, user, request)
     pk, _ = await svc.effective_user(session, user, ctx)
     s = await r.SessionRepo(session).detail(sid)
     if s is None or s.owner_id != pk:
@@ -414,6 +419,8 @@ async def ask_stream(
         queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
 
         async def work() -> QaTurn:
+            work_context = {"session": session, "active": True}
+            token = request_session.set(work_context)
             try:
                 async with opener(user.ontology_id) as conn:
                     return await _ask_once(
@@ -428,28 +435,46 @@ async def ask_stream(
                         on_status=lambda a, b: queue.put_nowait((a, b)),
                     )
             finally:
+                work_context["active"] = False
+                request_session.reset(token)
                 queue.put_nowait(None)
 
         task = asyncio.create_task(work())
-        while (item := await queue.get()) is not None:
-            yield stream.sse("status", {"stage": item[0], "text": item[1]})
+        committed = False
         try:
-            turn = await task
-        except AppError as e:
-            yield stream.sse(
-                "error", {"code": e.code, "message": e.message, "retryable": e.status_code >= 500}
-            )
-            yield stream.sse("done", {"turnId": None, "kind": "failed", "elapsedMs": None})
-            return
-        except Exception:  # 流已经开始，不能再改 HTTP 状态码
-            _log.exception("qa stream failed: %s", sid)
-            yield stream.sse(
-                "error", {"code": "INTERNAL_ERROR", "message": "回答失败，请重试", "retryable": True}
-            )
-            yield stream.sse("done", {"turnId": None, "kind": "failed", "elapsedMs": None})
-            return
-        for eid, name, payload in await stream.stored_events(session, turn):
-            yield stream.sse(name, payload, eid)
+            while (item := await queue.get()) is not None:
+                yield stream.sse("status", {"stage": item[0], "text": item[1]})
+            try:
+                turn = await task
+                events = await stream.stored_events(session, turn)
+                await session.commit()
+                committed = True
+            except AppError as e:
+                await session.rollback()
+                yield stream.sse(
+                    "error", {"code": e.code, "message": e.message, "retryable": e.status_code >= 500}
+                )
+                yield stream.sse("done", {"turnId": None, "kind": "failed", "elapsedMs": None})
+                return
+            except Exception:  # 流已经开始，不能再改 HTTP 状态码
+                await session.rollback()
+                _log.exception("qa stream failed: %s", sid)
+                yield stream.sse(
+                    "error", {"code": "INTERNAL_ERROR", "message": "回答失败，请重试", "retryable": True}
+                )
+                yield stream.sse("done", {"turnId": None, "kind": "failed", "elapsedMs": None})
+                return
+            for eid, name, payload in events:
+                yield stream.sse(name, payload, eid)
+        finally:
+            # Starlette may cancel the whole response scope on disconnect; finish cleanup first.
+            with CancelScope(shield=True):
+                if not task.done():
+                    task.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await task
+                if not committed and session.in_transaction():
+                    await session.rollback()
 
     return StreamingResponse(gen(), media_type=stream.MEDIA_TYPE, headers=stream.HEADERS)
 
@@ -791,6 +816,9 @@ async def rule_events(tid: str, session: SessionDep, user: CurrentUserDep, ctx: 
         from sqlalchemy import or_
         term = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         query = query.where(or_(Event.code.ilike(f"%{term}%", escape="\\"), Event.object_id.ilike(f"%{term}%", escape="\\"), Event.obj_label.ilike(f"%{term}%", escape="\\")))
+    from app.modules.governance.dynamic_guard import event_fields, event_payload, read_scope
+    await event_fields(session, user, event_type.code, event_type.payload)
+    query = await read_scope(session, user, query, Event)
     events = list(await session.scalars(query.order_by(Event.id.desc()).limit(101)))
     items = []
     for event in events[:100]:
@@ -798,6 +826,7 @@ async def rule_events(tid: str, session: SessionDep, user: CurrentUserDep, ctx: 
             continue
         try:
             await authorize_object(session, user, event)
+            await event_payload(session, user, event)
         except AppError:
             continue
         items.append({"id": event.code, "label": event.obj_label or event.object_id, "at": event.occurred_at.isoformat()})
@@ -810,13 +839,20 @@ async def run_turn_rule(tid: str, body: TurnRuleRunIn, session: SessionDep, user
     from app.modules.dynamic.rules_models import Rule
     await get_adapter(session).xact_lock(session, f"qa.turn.rule.{tid}")
     turn, answer, card = await _rule_card(session, user, ctx, tid)
-    if card.get("result"):
-        if card.get("eventId") != body.event_id:
-            raise AppError("此轮规则已运行，请重新提问以选择其他事件", code="IDEMPOTENCY_CONFLICT", status_code=409)
-        return card["result"]
     rule = await session.scalar(select(Rule).where(Rule.code == card["id"]))
     if not rule or rule.version != card["version"]:
         raise AppError("规则版本已变化，请重新提问", code="VERSION_CONFLICT", status_code=409)
+    if card.get("result"):
+        from app.modules.governance.dynamic_guard import REASON, context
+        policy_context = await context(session, user)
+        if policy_context is not None and (
+            policy_context["allowed"]["rule"].get(card["id"]) != str(card["version"])
+            or policy_context["watermark"] is None or turn.created_at <= policy_context["watermark"]
+        ):
+            raise AppError(REASON, code="GOVERNANCE_DYNAMIC_DENIED", status_code=403)
+        if card.get("eventId") != body.event_id:
+            raise AppError("此轮规则已运行，请重新提问以选择其他事件", code="IDEMPOTENCY_CONFLICT", status_code=409)
+        return card["result"]
     if (rule.trigger or {}).get("kind") == "事件":
         from app.common.auth import check_func
         check_func(user, "event-types", "manage")
@@ -1150,9 +1186,19 @@ async def tuning_summary(session: SessionDep, user: CurrentUserDep, ctx: ViewCon
         version = release.ver
     else:
         version = await versions.current_version(session)
+    # Latest tuning record, not a source watermark: the UI label is “数据截至”.
+    from app.modules.qa.models import QaCert, QaEvalRun, QaFeedback, QaFreqQuestion
+
+    latest_values = [
+        await session.scalar(select(func.max(QaCert.certified_at))),
+        await session.scalar(select(func.max(QaEvalRun.run_at))),
+        await session.scalar(select(func.max(QaFeedback.fed_back_at))),
+        await session.scalar(select(func.max(QaFreqQuestion.computed_at))),
+    ]
+    latest = max((value for value in latest_values if value is not None), default=None)
     return TuningSummaryOut(
         version=version or "",
-        data_as_of="",  # 题库/反馈等表没有统一业务截止时间，不能冒充数据源水位。
+        data_as_of=latest.astimezone(clock.local_now().tzinfo).strftime("%Y-%m-%d %H:%M") if latest else "",
         recert_count=await r.CertRepo(session).count_status(CertStatus.recert),
         open_feedback=await r.FeedbackRepo(session).count_open(),
         uncert_freq=await r.FreqRepo(session).count_uncert(),

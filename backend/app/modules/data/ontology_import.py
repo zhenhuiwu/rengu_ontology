@@ -145,7 +145,9 @@ async def inspect_source(session, code: str, body: ImportPreviewIn):
             "schema": body.schema_,
             "tables": meta,
             "proposal": proposal,
-            "warnings": structural_warnings(found) + hints,
+            "warnings": structural_warnings([table for table in found if table.kind != "view"])
+            + [f"视图 {table.name} 没有数据库主键；需显式选择唯一键并验证空值和重复后导入，仅支持镜像，不支持binlog CDC"
+               for table in found if table.kind == "view"] + hints,
             "fingerprint": fingerprint,
             "generator": "规则",
             "llm": False,
@@ -330,7 +332,12 @@ async def apply_import(
         selected_pk = chosen.pk or obj["pk"]
         unique = {table.pk[0]} if len(table.pk) == 1 else set()
         column = next((c for c in table.columns if c.name == selected_pk), None)
-        if not column or selected_pk not in unique:
+        if table.kind == "view":
+            if not chosen.pk or not column or column.kind not in ("integer", "string"):
+                raise conflict("视图须显式声明整数或文本唯一键；不能推测主键", "VIEW_IDENTIFIER_UNAVAILABLE", table=obj["table"])
+            from app.modules.data.external_cdc import cfg_for
+            await connector.validate_view_key(ds.type.value, cfg_for(ds), body.schema_, table.name, selected_pk)
+        elif not column or selected_pk not in unique:
             raise conflict("主键必须选择源表真实的单列唯一非空字段", table=obj["table"])
         if chosen.title_field and chosen.title_field not in {p["api"] for p in obj["props"]}:
             raise conflict("显示标题必须选择本次预览的源属性", table=obj["table"])

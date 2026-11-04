@@ -486,8 +486,10 @@ watch([baseline, cr.items, cr.head, isDraft, cr.loading], () => {
 
 let definitionSeq = 0;
 const definitionError = ref('');
-watch(() => JSON.stringify([selectedId.value, staticContextKey(), route.query.view, workflow.loading.value,
-  draft.value?.id, cr.loading.value, cr.error.value, cr.head.value?.targets]), async () => {
+const knowledgeDetailKey = () => JSON.stringify([selectedId.value, staticContextKey(), route.query.view,
+  route.query.view === 'draft' || draftOnly.value ? workflow.loading.value : false,
+  draft.value?.id, cr.loading.value, cr.error.value, cr.head.value?.targets]);
+watch(knowledgeDetailKey, async () => {
   const n = ++definitionSeq, key = staticContextKey(), id = selectedId.value;
   definitionError.value = '';
   if (!isStaticReal() || !id || (route.query.view === 'draft' && workflow.loading.value)
@@ -525,26 +527,26 @@ const deletion = useDefinitionDelete('knowledge', {
   </Teleport>
 
   <div class="gl">
-    <div class="panel gl-list">
+    <div class="panel gl-list side-list">
       <div class="gl-filter">
         <a-input-search :value="kw" placeholder="搜索名称、编号或同义词" allow-clear @change="(e: any) => (kw = e.target.value)" />
         <div class="gl-selects">
-          <a-select v-model:value="ktype" :options="TYPE_OPTIONS" size="small" class="gl-sel" />
-          <a-select v-model:value="st" :options="ST_OPTIONS" size="small" class="gl-sel" />
+          <a-select v-model:value="ktype" :options="TYPE_OPTIONS" class="gl-sel" />
+          <a-select v-model:value="st" :options="ST_OPTIONS" class="gl-sel" />
         </div>
       </div>
       <a-alert v-if="deletion.error.value || knowledgePage.error.value || definitionError" type="error" :message="deletion.error.value || knowledgePage.error.value || definitionError" show-icon />
       <div v-if="knowledgePage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
-      <ul class="gl-items" :aria-busy="knowledgePage.loading.value">
-        <li v-for="e in list" :key="e.id" :class="{ active: e.id === cur?.id }" :title="`${e.name} · ${e.type}${e.synonyms.length ? ` · ${e.synonyms.slice(0, 3).join('、')}` : ''} · ${e.id}`" @click="pick(e.id)">
-          <div class="gl-row">
-            <span class="t-14 gl-name gl-ell">{{ e.name }}</span>
-            <span class="t-12 c-3 gl-ft">{{ e.type }}</span>
-            <span v-if="shownStatus(e) !== '已发布'" class="t-12 num" :class="shownClass(shownStatus(e))">{{ shownStatus(e) }}{{ crOf(e) && shownStatus(e) !== '已停用' ? ` · ${crOf(e)}` : '' }}</span>
+      <ul class="gl-items side-list-items" :aria-busy="knowledgePage.loading.value">
+        <li v-for="e in list" :key="e.id" class="side-list-item" :class="{ active: e.id === cur?.id }" :title="`${e.name} · ${e.type}${e.synonyms.length ? ` · ${e.synonyms.slice(0, 3).join('、')}` : ''} · ${e.id}`" @click="pick(e.id)">
+          <div class="gl-row side-list-row">
+            <span class="t-14 gl-name gl-ell side-list-name">{{ e.name }}</span>
+            <span class="t-12 c-3 gl-ft side-list-meta">{{ e.type }}</span>
+            <span v-if="shownStatus(e) !== '已发布'" class="t-12 num side-list-meta" :class="shownClass(shownStatus(e))">{{ shownStatus(e) }}{{ crOf(e) && shownStatus(e) !== '已停用' ? ` · ${crOf(e)}` : '' }}</span>
           </div>
         </li>
       </ul>
-      <div class="gl-foot">
+      <div class="gl-foot side-list-foot">
         <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" unit="条" class="gl-pager" empty-text="没有匹配的业务知识" />
       </div>
     </div>
@@ -759,19 +761,14 @@ const deletion = useDefinitionDelete('knowledge', {
 <style scoped>
 .gl-ell { display: inline-block; max-width: calc(100% - 48px); vertical-align: bottom; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .gl { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.gl-list { width: 300px; flex: none; }
+.gl-list { flex: none; }
 .gl-filter { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 8px; flex: none; }
 .gl-selects { display: flex; gap: 8px; }
 .gl-sel { flex: 1; min-width: 0; }
-.gl-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
-.gl-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
-.gl-items li:hover { background: var(--g3); }
-.gl-items li.active { background: var(--brand-bg); }
-.gl-items li.active .gl-name { color: var(--brand); }
+.gl-items { flex: 1; min-height: 0; }
 .gl-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .gl-syn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .gl-pager { flex: 1; min-height: 0; }
-.gl-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; justify-content: space-between; }
 .gl-detail { flex: 1; min-width: 0; }
 .gl-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
 .gl-head :deep(.ant-tag) { margin-inline-end: 0; }

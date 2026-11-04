@@ -123,7 +123,7 @@ export const LINKS: LinkType[] = [
 
   // —— 交易明细 ——
   { id: 'order_line_product', name: '订单行商品', from: 'order_line', to: 'product', card: 'N : 1', key: 'sku = product.sku', fromProp: 'sku', toProp: 'sku',
-    join: 'T_SALE_ORDER_LINE.sku_code = T_SKU.sku_code', reverse: '销售明细', nullable: false, status: '已发布', since: 'v2026.03.2', owner: '王敏',
+    join: 'T_SALE_ORDER_LINE.sku_code = T_SKU.sku_code', reverse: '销售明细', nullable: false, status: '已发布', since: 'v2026.03.2', owner: 'admin',
     desc: '订单行售出的商品。', quality: Q(99.996, 207, 0, { note: '207 行为临时编码（门店手工录入的散称商品）' }),
     usage: [M('gmv', '销售额（不含税）', '商品维度'), M('gross_margin', '毛利率', '商品、品类维度'), R('R-007', '商品毛利率越线', '按商品汇总')],
     history: [BASE('王敏')] },
@@ -149,7 +149,7 @@ export const LINKS: LinkType[] = [
     usage: [{ type: '指标', name: '新增会员数', note: '按门店拆分的默认路径' }, { type: '认证问答', name: '各门店本月新增会员数', note: '已认证' }],
     history: [BASE('吴佳')] },
   { id: 'member_holds_cards', name: '持有', from: 'member', to: 'stored_card', card: '1 : N', key: 'member_id = stored_card.member_id', fromProp: 'member_id', toProp: 'member_id',
-    join: 'T_MEMBER.member_id = T_SVC_CARD.member_id', reverse: '持卡会员', nullable: true, status: '草稿', cr: 'CR-0012', owner: '王敏',
+    join: 'T_MEMBER.member_id = T_SVC_CARD.member_id', reverse: '持卡会员', nullable: true, status: '草稿', cr: 'CR-0012', owner: 'admin',
     desc: '会员名下的储值卡，一个会员可持有多张。储值余额改由储值卡汇总。',
     quality: Q(99.88, 412, 0, { checkedAt: '2026-10-25 15:02', note: '测试环境抽检：412 张卡的会员已注销（迁移方式待补，见 CR-0012 V15 警告）' }),
     usage: [{ type: '指标', name: '储值卡余额', note: '新增 v1（同一变更单）' }, { type: '指标', name: '会员储值余额', note: '改为经本关系汇总' }],
@@ -175,7 +175,7 @@ export const LINKS: LinkType[] = [
       { ...BASE('陈立军'), status: '已替代' },
     ] },
   { id: 'employee_works_at_store', name: '所属门店', from: 'employee', to: 'store', card: 'N : 1', key: 'store_id = store.store_id', fromProp: 'store_id', toProp: 'store_id',
-    join: 'T_EMPLOYEE.store_id = T_STORE.store_id', reverse: '门店员工', nullable: true, status: '已发布', since: 'v2026.03.2', owner: '王敏',
+    join: 'T_EMPLOYEE.store_id = T_STORE.store_id', reverse: '门店员工', nullable: true, status: '已发布', since: 'v2026.03.2', owner: 'admin',
     desc: '员工任职的门店；总部和仓库员工为空。员工为敏感对象，只有人事和门店运营可见。', quality: Q(99.71, 21, 1430, { note: '21 名员工的门店已闭店，人事未调岗' }),
     usage: [{ type: '视图', name: '门店人效看板', note: '仅人事、门店运营可见' }],
     history: [BASE('王敏')] },
@@ -192,12 +192,12 @@ export const LINKS: LinkType[] = [
 
   // —— 商品 ——
   { id: 'product_in_category', name: '所属品类', from: 'product', to: 'category', card: 'N : 1', key: 'category_id = category.category_id', fromProp: 'category_id', toProp: 'category_id',
-    join: 'T_SKU.category_code = T_CATEGORY.category_code', reverse: '品类商品', nullable: false, status: '已发布', since: 'v2026.03.2', owner: '王敏',
+    join: 'T_SKU.category_code = T_CATEGORY.category_code', reverse: '品类商品', nullable: false, status: '已发布', since: 'v2026.03.2', owner: 'admin',
     desc: '商品挂在最末级品类（小类）上。', quality: Q(100, 0),
     usage: [M('gmv', '销售额（不含税）', '商品维度：大类 › 中类 › 小类'), M('gross_margin', '毛利率', '品类维度'), R('R-007', '商品毛利率越线', '按品类阈值')],
     history: [BASE('王敏')] },
   { id: 'category_parent', name: '上级品类', from: 'category', to: 'category', card: 'N : 1', key: 'parent_id = category.category_id', fromProp: 'parent_id', toProp: 'category_id',
-    join: 'T_CATEGORY.parent_code = T_CATEGORY.category_code', reverse: '下级品类', nullable: true, status: '已发布', since: 'v2026.03.2', owner: '王敏',
+    join: 'T_CATEGORY.parent_code = T_CATEGORY.category_code', reverse: '下级品类', nullable: true, status: '已发布', since: 'v2026.03.2', owner: 'admin',
     desc: '品类三级层级（大类 › 中类 › 小类）；大类的上级为空。', quality: Q(100, 0, 24, { note: '24 个大类无上级，符合预期' }),
     usage: [{ type: '视图', name: '品类经营分析', note: '层级下钻' }], history: [BASE('王敏')] },
   { id: 'product_main_supplier', name: '主供应商', from: 'product', to: 'supplier', card: 'N : 1', key: 'main_supplier_id = supplier.supplier_id', fromProp: 'main_supplier_id', toProp: 'supplier_id',

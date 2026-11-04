@@ -18,7 +18,7 @@ import type { QaDynamicAnswer } from '@/api/qa';
 import type { QaRealTurn, QaChainAnswer, QaClarifyAnswer, QaActionAnswer, QaAlertRef, QaActionSuggest, QaActionRun } from '@/api/qa';
 /** applied：越权那一轮已提交申请；tips：本会话中途修改范围/口径后插入的系统提示（追加在最新一轮之后） */
 const props = defineProps<{ applied: boolean; tips: string[]; actionRuns: Record<string, QaActionRun>; actionIssues: Record<string, string>; actionBusy: boolean }>();
-const emit = defineEmits<{ (e: 'suggest', action?: QaActionSuggest, turnId?: string): void; (e: 'refresh-action', turnId: string): void; (e: 'apply', turnId?: string): void }>();
+const emit = defineEmits<{ (e: 'suggest', action?: QaActionSuggest, turnId?: string): void; (e: 'refresh-action', turnId: string): void; (e: 'query-action', turnId: string): void; (e: 'apply', turnId?: string): void }>();
 const { isNew, activeTurns, activeId, draft, live, detail, sending, loading, send, streamStatus, sendError } = useQaSession();
 const { readonly, reason } = useReadonly();
 /** 示例会话的轮次（mock/qa.ts）；新追加的轮次统一用 QA_DEMO_CANNED */
@@ -148,6 +148,7 @@ watch(chartRequests, async (requests) => { const ids = Object.keys(requests); co
         <span v-if="actionRuns[t.id]?.status === '已对账'" class="t-12 c-3">{{ actionRuns[t.id]?.reconcile }}<template v-if="actionRuns[t.id]?.reconcile === '外部未执行' && actionRuns[t.id]?.failReason"> · 原因 {{ actionRuns[t.id]?.failReason }}</template><template v-if="actionRuns[t.id]?.extRef"> · 外部单号 {{ actionRuns[t.id]?.extRef }}</template></span>
         <span v-if="actionIssues[t.id]" class="t-12 qa-action-issue">{{ actionIssues[t.id] }} 原记录：{{ actionRuns[t.id]?.action }} · {{ actionRuns[t.id]?.objId }} · {{ actionRuns[t.id]?.paramsUnavailable ? '参数不可用' : actionRuns[t.id]?.params || '无参数' }} · 告警 {{ actionRuns[t.id]?.alertId === undefined ? '未提供' : actionRuns[t.id]?.alertId || '无' }}</span>
         <a-button v-if="actionRuns[t.id] && (actionIssues[t.id] || ['执行中', '审批中', '结果未知'].includes(actionRuns[t.id].status))" size="small" @click="emit('refresh-action', t.id)">刷新状态</a-button>
+        <a-button v-if="actionRuns[t.id]?.status === '结果未知' && !actionIssues[t.id]" size="small" :disabled="readonly || actionBusy" :loading="actionBusy" @click="emit('query-action', t.id)">查询幂等回执</a-button>
         <span v-if="live && !t.answer.action.runId && t.answer.action.stageVersion !== 1" class="t-12 c-3">历史动作卡无法确认是否已执行，请重新提问后发起。</span>
         <a-tooltip v-else-if="t.answer.action.canStage !== false && (!actionRuns[t.id] || actionRuns[t.id].status === '待确认')" :title="reason || actionIssues[t.id] || actionRuns[t.id]?.can?.reasons?.confirm || (t.answer.action.dryRun.passed === false ? '动作校验未通过，请核对条件后重新提问' : '在当前页面确认目标和参数后执行')"><a-button size="small" :disabled="readonly || actionBusy || !!actionIssues[t.id] || actionRuns[t.id]?.can?.confirm === false || (t.answer.action.dryRun.passed === false && (!t.answer.action.runId || !!actionRuns[t.id]))" @click="emit('suggest', t.answer.action, t.id)">{{ t.answer.action.runId && !actionRuns[t.id] ? '查看状态' : '确认并执行' }}</a-button></a-tooltip>
         <a-tag v-else-if="t.answer.action.canStage === false">仅建议</a-tag>

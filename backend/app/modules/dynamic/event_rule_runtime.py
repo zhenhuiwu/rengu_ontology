@@ -114,7 +114,7 @@ class EventExpression(Expression):
             ast.Attribute(ast.Name(key[0], ast.Load()), key[1], ast.Load()), [ast.Eq()], [ast.Constant(True)]
         )
 
-    def run(self, row, at):
+    async def run(self, row, at):
         values = dict(row)
         descriptions = []
         for column, (fields, pairs, negate) in self.transitions.items():
@@ -123,7 +123,7 @@ class EventExpression(Expression):
             pair = tuple(row[field] for field in fields)
             values[column] = (pair not in pairs) if negate else (pair in pairs)
             descriptions.append(f"{pair[0]} → {pair[1]}")
-        matched, details = super().run(values, at)
+        matched, details = await super().run(values, at)
         return matched, " · ".join([*descriptions, details]).strip(" ·")
 
 
@@ -232,6 +232,9 @@ async def stage_action(session, user, rule, event, fields, alert, values, *, ori
 async def dispatch(session, user, *, rule_code, event_id):
     # Reload real role membership even if an internal caller passed an outdated identity.
     user = await resolve_user(session, user.id)
+    from app.modules.governance.policy import enforce
+    from app.modules.static.lineage import identity as resource_identity
+    await enforce(session, user, [resource_identity("rule", rule_code)], "execute", unmasked=True)
     for page in ("event-types", "rules", "alerts"):
         check_func(user, page, "manage")
     # shortcut: serializes local rule writes; use shared publication locks if throughput requires it.
@@ -302,6 +305,8 @@ async def dispatch(session, user, *, rule_code, event_id):
 
     await authorize_object(session, user, event)
     fields = [FieldOut.model_validate(field) for field in definition.get("payload", [])]
+    from app.modules.governance.dynamic_guard import event_payload
+    await event_payload(session, user, event)
     validate_fields(fields, event.payload)
     result = {"ruleId": rule.code, "ruleVersion": rule.version, "status": "not_matched"}
     if not filter_matches(trigger.get("filter") or "全部", fields, event.payload):
@@ -354,7 +359,7 @@ async def dispatch(session, user, *, rule_code, event_id):
     if expression.columns:
         row = await existing_row(session, user, obj, gov, event.object_id)
         inputs.update({f"__object__.{column}": row[column] for column in expression.columns})
-    matched, values = expression.run(inputs, evaluated_at)
+    matched, values = await expression.run(inputs, evaluated_at)
     result.update({"evaluatedAt": evaluated_at.isoformat(), "evaluationMode": "current_object" if expression.columns else "event_payload"})
     if not matched:
         return result

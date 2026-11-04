@@ -217,7 +217,11 @@ def function_tools(functions: list[dict], taken: set[str], key: ApiKeyContext | 
             {
                 "name": tool_name("fn", fn["name"], taken),
                 "description": f"{fn['title']}。{fn['description']}".rstrip("。") + "。",
-                "schema": _object({"input": _object(inputs, list(inputs))}, ["input"]),
+                "schema": _object({
+                    "input": fn.get("inputSchema") or _object(inputs, list(inputs)),
+                    **({"version": {"type": "string", "enum": [fn["version"]]}}
+                       if fn.get("version") else {}),
+                }, ["input", *(["version"] if fn.get("inputSchema") and fn.get("version") else [])]),
                 "binding": {
                     "kind": "function",
                     "id": fn["id"],

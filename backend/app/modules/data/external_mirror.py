@@ -69,6 +69,8 @@ def signature(binding, source, obj):
             primary.source_column if primary else None,
             sorted((p.source_column, p.data_type, p.is_sensitive, p.visibility, p.transform or '')
                    for p in obj.properties if p.source_column in selected)]
+    if binding.declared_unique_key:
+        data.append({"declaredUniqueKey": binding.declared_unique_key})
     return hashlib.sha256(json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
 
@@ -115,12 +117,17 @@ def structure_signature(schema, name, reflected, columns):
 
 def current_rows(state):
     """Unfinished scans retain old current rows; only a complete scan publishes removals."""
+    if (state.cursor_value or {}).get('binlogCatchupPending') or (state.cursor_value or {}).get('viewValidationPending'):
+        from sqlalchemy import false
+        return false()
     scan_id = (state.cursor_value or {}).get('scanId')
     current = ExternalMirrorRow.is_current.is_(True)
     return or_(current, ExternalMirrorRow.last_seen_scan == scan_id) if not state.complete and type(scan_id) is int else current
 
 
 def current_rows_sql(state):
+    if (state.cursor_value or {}).get('binlogCatchupPending') or (state.cursor_value or {}).get('viewValidationPending'):
+        return 'FALSE'
     scan_id = (state.cursor_value or {}).get('scanId')
     return f'(is_current = TRUE OR last_seen_scan = {scan_id})' if not state.complete and type(scan_id) is int else 'is_current = TRUE'
 
@@ -238,7 +245,10 @@ async def _run_batch(oid, code, user, scheduled, run_id, cdc_lease=None):
             if not password:
                 raise MirrorError('源连接密码不可用')
             reflected = await connector.inspect_tables(source.type.value, cfg, schema, [name])
-            if len(reflected) != 1 or reflected[0].pk != [primary]:
+            declared_view = len(reflected) == 1 and reflected[0].kind == 'view' and binding.declared_unique_key == primary
+            if declared_view:
+                state.cursor_value = {**(state.cursor_value or {}), 'viewValidationPending': True}
+            if len(reflected) != 1 or (reflected[0].pk != [primary] and not declared_view):
                 raise MirrorRestartRequired('源结构变化：需要与对象映射一致的单列源主键')
             structure = structure_signature(schema, name, reflected[0], binding.read_columns)
             previous_structure = (state.cursor_value or {}).get('structure')
@@ -257,7 +267,14 @@ async def _run_batch(oid, code, user, scheduled, run_id, cdc_lease=None):
             query = select(*(src.c[c] for c in cols)).order_by(src.c[primary]).limit(state.batch_size + 1)
             if cursor is not None:
                 query = query.where(src.c[primary] > cursor)
-            rows = await connector._read(source.type.value, cfg, lambda conn: [dict(row._mapping) for row in conn.execute(query)])
+            def read_rows(conn):
+                if declared_view:
+                    try:
+                        connector.assert_unique_key(conn, schema, name, primary)
+                    except ValueError as exc:
+                        raise MirrorError(str(exc)) from None
+                return [dict(row._mapping) for row in conn.execute(query)]
+            rows = await connector._read(source.type.value, cfg, read_rows)
             batch = rows[:state.batch_size]
             values = []
             seen_keys = set()
@@ -286,6 +303,8 @@ async def _run_batch(oid, code, user, scheduled, run_id, cdc_lease=None):
             state.processed += len(batch)
             state.complete = len(rows) <= state.batch_size
             if state.complete:
+                if declared_view:
+                    state.cursor_value = {**state.cursor_value, 'viewValidationPending': False}
                 seen = func.coalesce(ExternalMirrorRow.last_seen_scan == scan_id, False)
                 await session.execute(update(ExternalMirrorRow).where(
                     ExternalMirrorRow.ontology_id == oid, ExternalMirrorRow.object_code == code,

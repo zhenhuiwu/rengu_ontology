@@ -101,7 +101,7 @@ export const LIFECYCLES: Lifecycle[] = [
     ],
   },
   {
-    objectId: 'product', objectName: '商品', field: '商品状态（sku_status）', version: 3, owner: '王敏', updatedAt: '2026-08-12 15:05',
+    objectId: 'product', objectName: '商品', field: '商品状态（sku_status）', version: 3, owner: 'admin', updatedAt: '2026-08-12 15:05',
     desc: '商品从新品引入到淘汰的状态。停售商品不参与补货（R-012）和调价（R-007）。',
     states: [
       S('新品', '初始', '已建档、试销 30 天内。', 1206, 40, 160, '试销 30 天内转正或淘汰'),

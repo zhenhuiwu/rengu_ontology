@@ -138,14 +138,14 @@ async function loadGraph() {
     fetchGraph().then((g) => {
       if (!valid()) return;
       graphData.value = g; graphLoaded.value = true;
-      if (graphRef) { graphRef.clearCells(); addCells(graphRef); }
+      if (graphRef) addCells(graphRef);
     }).catch(failed),
     fetchOverview().then((s) => { if (valid()) summary.value = s; }).catch(failed),
     fetchOverviewReleases().then((r) => { if (valid()) recent.value = r.items; }).catch(failed),
   ]);
 }
 watch([contextKey, live], loadGraph, { immediate: true });
-watch(chrome, () => { if (!graphRef) return; graphRef.clearCells(); addCells(graphRef); });
+watch(chrome, () => { if (graphRef) addCells(graphRef); });
 onBeforeUnmount(() => { ++overviewSeq; graphRef = null; });
 function draw(g: Graph) {
   graphRef = g;
@@ -195,32 +195,32 @@ function focusGraph(hoverId?: string) {
 function addCells(g: Graph) {
   const { nodes, edges } = graphData.value;
   const positions = layoutGraph(nodes, edges);
-  g.batchUpdate('overview', () => {
-    nodes.forEach((o) => {
+  const graphNodes = nodes.map((o) => {
       const p = positions.get(o.id)!;
       const failed = !live.value && failedByType.has(o.id);
-      g.addNode({
+      return {
         id: o.id, shape: 'circle', x: p.x, y: p.y, width: p.width, height: p.height, zIndex: 1, label: o.name,
         attrs: {
           body: { fill: relationshipColor(o.group || o.api || o.id, chrome.value === 'navy', graphGroups.value), stroke: failed ? STATUS.error : GRAY.g7, strokeWidth: 1.5, strokeDasharray: o.draft ? '4 3' : '', cursor: 'grab' },
           label: { fill: GRAY.g10, fontSize: 14, fontWeight: 600, title: o.name, textWrap: { width: 58, height: 54, ellipsis: true, breakWord: true }, cursor: 'grab' },
         },
-      });
-    });
+      };
+  });
     const routes = relationshipRoutes(nodes.map((n) => ({ id: n.id, ...positions.get(n.id)! })),
       edges.map((e) => ({ ...e, text: e.name || e.id })));
-    edges.forEach((l) => {
+  const graphEdges = edges.flatMap((l) => {
       const route = routes.get(l.id);
-      if (!route) return;
+      if (!route) return [];
       const label = l.name || l.id;
-      g.addEdge({
+      return [{
         id: l.id,
         ...route, zIndex: 0, relationship: true,
         attrs: { line: { title: label, stroke: GRAY.g7, strokeWidth: 1, strokeDasharray: l.status === '已发布' ? '' : '4 3', targetMarker: { name: 'classic', width: 7, height: 6 }, cursor: 'pointer' }, wrap: { strokeWidth: 14, cursor: 'pointer' } },
         labels: [{ position: route.labelPosition, attrs: { label: { text: label, title: label, fontSize: 14, fill: GRAY.g9, cursor: 'pointer' }, body: { fill: GRAY.g2, stroke: GRAY.g2, strokeWidth: 6, rx: 2, ry: 2, cursor: 'pointer' } } }],
-      });
-    });
+      }];
   });
+  // Reset cancels pending same-ID jobs before rendering the replacement views.
+  g.fromJSON({ nodes: graphNodes, edges: graphEdges });
   focusGraph();
   if (g.getNodes().length) requestAnimationFrame(() => {
     if (graphRef !== g) return;

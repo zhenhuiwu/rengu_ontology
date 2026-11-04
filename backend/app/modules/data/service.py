@@ -97,8 +97,8 @@ def to_out(d: Datasource, runs=None) -> DatasourceOut:
             cron_text=d.sync_cron_text,
             window=d.sync_window,
             cursor_field=d.sync_cursor_field,
-            next_run=d.sync_next_run if d.type != DsType.dm8 or d.mirror_schedule_actor else None,
-            mirror_schedule_enabled=bool(d.type == DsType.dm8 and d.mirror_schedule_actor and d.sync_next_run),
+            next_run=d.sync_next_run if d.type not in (DsType.dm8, DsType.mysql) or d.mirror_schedule_actor else None,
+            mirror_schedule_enabled=bool(d.type in (DsType.dm8, DsType.mysql) and d.mirror_schedule_actor and d.sync_next_run),
         ),
         runs=[
             DsRun(time=r.run_at, result=r.result, rows=r.rows, secs=r.secs, msg=r.msg,
@@ -159,11 +159,11 @@ class DatasourceService:
 
     async def list_tables(self, code: str, kw: str | None, page: PageParams):
         ds = await self.get(code)
-        return await self.tables.page_for(ds.id, kw, page, schema=ds.database.strip() if ds.type == DsType.dm8 and ds.database.strip() else None)
+        return await self.tables.page_for(ds.id, kw, page, schema=ds.database.strip() if ds.type in (DsType.dm8, DsType.mysql) and ds.database.strip() else None)
 
     async def create(self, body: DatasourceCreate, *, actor: str) -> Datasource:
         from app.modules.data.mirror_scheduler import next_slot
-        next_run = next_slot(body.mode, body.cron) if body.type == DsType.dm8 else None
+        next_run = next_slot(body.mode, body.cron) if body.type in (DsType.dm8, DsType.mysql) else None
         code = f"DS-{await self.repo.max_code_no() + 1:03d}"
         ds = Datasource(
             code=code,
@@ -238,7 +238,7 @@ class DatasourceService:
             "sync_cron": body.cron,  # 前端编辑只改 sync.mode / sync.cron，cronText 等保持
             **_type_fields(body),
         }
-        if body.type == DsType.dm8:
+        if body.type in (DsType.dm8, DsType.mysql):
             next_run = next_slot(body.mode, body.cron)
             values.update(sync_next_run=next_run, mirror_schedule_actor=actor if next_run else None)
         else:
@@ -313,8 +313,10 @@ class DatasourceService:
         ds = await self.get(code)
         if ds.type == DsType.dm8 and not schemas:
             raise AppError("请先选择需要刷新表目录的 schema", code="VALIDATION_FAILED", status_code=422)
-        if ds.type != DsType.dm8 and schemas is not None:
-            raise AppError("当前仅达梦数据源支持选择 schema 刷新", code="VALIDATION_FAILED", status_code=422)
+        if ds.type == DsType.mysql and not schemas and ds.database.strip():
+            schemas = [ds.database.strip()]
+        if ds.type not in (DsType.dm8, DsType.mysql) and schemas is not None:
+            raise AppError("当前仅达梦或 MySQL 数据源支持选择 schema 刷新", code="VALIDATION_FAILED", status_code=422)
         if config is None:
             config = {
                 "host": ds.host,
@@ -380,8 +382,10 @@ class DatasourceService:
 
     async def list_schemas(self, code: str) -> list[str]:
         ds = await self.get(code)
+        if ds.type == DsType.mysql and ds.database.strip():
+            return [ds.database.strip()]
         if ds.type != DsType.dm8:
-            raise AppError("当前仅达梦数据源支持选择 schema", code="VALIDATION_FAILED", status_code=422)
+            raise AppError("当前仅达梦或 MySQL 数据源支持选择 schema", code="VALIDATION_FAILED", status_code=422)
         config = {"host": ds.host, "port": ds.port, "database": ds.database, "user": ds.username,
                   "ssl": ds.ssl, "password": decrypt_password(ds.password_enc)}
         _require_real(ds.type, config)

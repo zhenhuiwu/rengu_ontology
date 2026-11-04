@@ -174,7 +174,12 @@ class StaticService:
                 }
                 for code, data in (await self._section("objectTypes") or {}).items()
             ]
-        return [shapes.object_brief(o) for o in await self.repo.object_types(light=True)]
+        from app.modules.static.source_labels import labels
+        rows = [shapes.object_brief(o) for o in await self.repo.object_types(light=True)]
+        sources = await labels(self.session, (row.get('source') for row in rows))
+        for row in rows:
+            row.update({k: v for k, v in sources.get(row.get('source'), {}).items() if k == 'sourceName'})
+        return rows
 
     async def object_detail(self, oid: str) -> Obj:
         if self.ver:
@@ -191,6 +196,10 @@ class StaticService:
             db=shapes.db_of(o.datasource_name),
         )
         d["props"] = [shapes.prop(p) for p in o.properties]
+        from app.modules.static.source_labels import labels
+        source = (await labels(self.session, [o.datasource_name])).get(o.datasource_name, {})
+        d.update({key: value for key, value in source.items() if key == 'db'})
+        d['brief'].update({key: value for key, value in source.items() if key == 'sourceName'})
         return d
 
     async def object_properties(self, oid: str, kw: str, p: PageParams, cr_id: str | None = None) -> Obj:

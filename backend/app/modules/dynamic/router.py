@@ -3,9 +3,10 @@
 只读（?ver= / ?previewAs=）由全局 ReadonlyGuardDep 统一拦截写请求（403 READONLY）。
 """
 
+import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, Path, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Path, Query, Request, Response, status
 
 from app.common.auth import CurrentUserDep, require_func
 from app.common.pagination import MAX_PAGE_SIZE, Page, PageParams
@@ -44,6 +45,16 @@ from app.modules.dynamic.service import ActionService, AlertService, validation_
 from app.modules.static.explorer import parse_filters
 
 router = APIRouter(tags=["dynamic"])
+logger = logging.getLogger(__name__)
+
+
+async def _dispatch_confirmed_action(code: str, ontology_id: int):
+    """Dispatch only this committed run; the durable periodic worker remains the fallback."""
+    try:
+        from app.modules.integration.execution import dispatch_run
+        await dispatch_run(code, ontology_id)
+    except Exception as exc:
+        logger.warning("Immediate action dispatch failed (%s); durable queue retained", type(exc).__name__)
 
 CatalogDep = Annotated[DatabaseRefCatalog, Depends(get_catalog)]
 DynamicPathCode = Annotated[str, Path(pattern=r"^[^\x00]+$")]
@@ -146,6 +157,7 @@ FILTERS_DOC = (
 async def list_alerts(
     page: AlertPageQ,
     svc: Annotated[AlertService, Depends(_alert_list)],
+    response: Response,
     status_: Annotated[str, Query(alias="status")] = "open",
     level: str | None = None,
     rule_id: Annotated[str | None, Query(alias="ruleId", description="规则编号，逗号分隔多选")] = None,
@@ -154,7 +166,7 @@ async def list_alerts(
     dim: Annotated[list[str] | None, Query(description="维度值 objKind:id，可重复")] = None,
     filters: Annotated[str | None, Query(description=FILTERS_DOC)] = None,
 ) -> AlertPage:
-    return await svc.search(
+    result = await svc.search(
         status=status_,
         level=level,
         rule_id=rule_id,
@@ -164,11 +176,15 @@ async def list_alerts(
         dim=dim,
         filters=parse_filters(filters),
     )
+    from app.modules.governance.dynamic_guard import notice
+    notice(response, svc.session)
+    return result
 
 
 @router.get("/alerts/facets", dependencies=ALERTS_READ)
 async def alert_facets(
     svc: Annotated[AlertService, Depends(_alert_list)],
+    response: Response,
     status_: Annotated[str, Query(alias="status")] = "open",
     level: str | None = None,
     rule_id: Annotated[str | None, Query(alias="ruleId")] = None,
@@ -178,7 +194,7 @@ async def alert_facets(
     filters: Annotated[str | None, Query(description=FILTERS_DOC)] = None,
 ) -> dict[str, Any]:
     """告警分面（与 GET /alerts 同一组筛选参数）：每一项的计数按其余已选条件过滤。"""
-    return await svc.facets(
+    result = await svc.facets(
         status=status_,
         level=level,
         rule_id=rule_id,
@@ -187,6 +203,9 @@ async def alert_facets(
         dim=dim,
         filters=parse_filters(filters),
     )
+    from app.modules.governance.dynamic_guard import notice
+    notice(response, svc.session)
+    return result
 
 
 @router.get("/alerts/meta", dependencies=ALERTS_READ)
@@ -256,6 +275,7 @@ async def people(alert_id: Annotated[str, Query(alias="alertId")], svc: AlertSvc
 async def list_action_runs(
     page: ActionPageQ,
     svc: Annotated[ActionService, Depends(_action_list)],
+    response: Response,
     tab: str | None = None,
     status_: Annotated[str | None, Query(alias="status")] = None,
     action: str | None = None,
@@ -269,7 +289,7 @@ async def list_action_runs(
     kw: str | None = None,
     scope: Annotated[str | None, Query(description="[推断] center/runs/all；有 tab 时固定 center")] = None,
 ) -> ActionRunPage:
-    return await svc.search(
+    result = await svc.search(
         tab=tab,
         status=status_,
         scope=scope,
@@ -284,6 +304,9 @@ async def list_action_runs(
         session_id=session_id,
         kw=kw,
     )
+    from app.modules.governance.dynamic_guard import notice
+    notice(response, svc.session)
+    return result
 
 
 @router.get("/actions/meta", dependencies=ACTIONS_READ)
@@ -435,8 +458,13 @@ async def get_action_run(
 
 
 @router.post("/action-runs/{code}:confirm", response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
-async def confirm_action(code: DynamicPathCode, svc: ActionSvc) -> ActionRunDetail:
-    return await svc.detail(await svc.confirm(code))
+async def confirm_action(code: DynamicPathCode, svc: ActionSvc, background: BackgroundTasks) -> ActionRunDetail:
+    detail = await svc.detail(await svc.confirm(code))
+    # SessionDep commits after the route; commit here first so the background
+    # dispatcher cannot race the queued writeback row.
+    await svc.session.commit()
+    background.add_task(_dispatch_confirmed_action, code, svc.user.ontology_id)
+    return detail
 
 
 @router.post("/action-runs/{code}:withdraw", response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
@@ -445,21 +473,49 @@ async def withdraw_action(code: DynamicPathCode, body: WithdrawIn, svc: ActionSv
 
 
 @router.post("/action-runs/{code}:approve", response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
-async def approve_action(code: DynamicPathCode, svc: ActionSvc) -> ActionRunDetail:
-    return await svc.detail(await svc.approve(code))
+async def approve_action(code: DynamicPathCode, svc: ActionSvc, background: BackgroundTasks) -> ActionRunDetail:
+    detail = await svc.detail(await svc.approve(code))
+    await svc.session.commit()
+    background.add_task(_dispatch_confirmed_action, code, svc.user.ontology_id)
+    return detail
 
 
 @router.post("/action-runs/{code}:resubmit", response_model=ResubmitOut, dependencies=ACTIONS_MANAGE)
-async def resubmit_action(code: DynamicPathCode, svc: ActionSvc) -> ResubmitOut:
+async def resubmit_action(code: DynamicPathCode, svc: ActionSvc, background: BackgroundTasks) -> ResubmitOut:
     new, old = await svc.resubmit(code)
-    return ResubmitOut(
+    out = ResubmitOut(
         id=new.code, idem_key=new.idem_key, action=await svc.detail(new), original=await svc.detail(old)
     )
+    await svc.session.commit()
+    background.add_task(_dispatch_confirmed_action, new.code, svc.user.ontology_id)
+    return out
 
 
 @router.post("/action-runs/{code}:reconcile", response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
 async def reconcile_action(code: DynamicPathCode, body: ReconcileIn, svc: ActionSvc) -> ActionRunDetail:
     return await svc.detail(await svc.reconcile(code, body.result, body.note))
+
+
+@router.post('/action-runs/{code}:query-result', response_model=ActionRunDetail, dependencies=ACTIONS_MANAGE)
+async def query_action_result(code: DynamicPathCode, svc: ActionSvc) -> ActionRunDetail:
+    from app.core import clock
+    from app.core.errors import Conflict
+    from app.modules.dynamic.models import ActionStatus
+    from app.modules.dynamic.service import DynamicReconciliationListener
+    from app.modules.integration.models import ReconcileState
+    from app.modules.integration.reconcile import DatabaseReconcileScheduler, lock_run, process
+    await svc.get(code)  # Same scoped row visibility as the action detail; never accepts a foreign run.
+    run = await lock_run(svc.session, code)
+    await svc._operation_access(run)
+    if run.is_seed or run.status != ActionStatus.unknown or not run.sys_code:
+        raise Conflict('只有真实外部结果未知的动作可以查询原幂等回执', code='STATE_INVALID')
+    task = await DatabaseReconcileScheduler(svc.session).ensure(run)
+    task.state, task.manual, task.next_at = ReconcileState.querying, False, clock.now()
+    task = await process(svc.session, code, DynamicReconciliationListener(svc.session, svc.catalog, svc.ports))
+    if run.status == ActionStatus.unknown:
+        await svc._log(run, '已查询原幂等回执，结果仍未知', task.last_error or task.last_ext_status or '尚无终态回执')
+        run.unknown_reason = '只读回执查询尚未核实终态：' + (task.last_error or task.last_ext_status or '尚无终态回执')
+    return await svc.detail(run)
 
 
 # ---------------- 决策评估（只给建议，不暂存不执行）----------------

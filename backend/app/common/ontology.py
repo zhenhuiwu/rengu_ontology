@@ -35,7 +35,9 @@ def require_ontology_id(session: AsyncSession) -> int:
     return ontology_id
 
 
-async def set_ontology_scope(session: AsyncSession, ontology_id: int) -> None:
+async def set_ontology_scope(
+    session: AsyncSession, ontology_id: int, *, load_data_bindings: bool = True
+) -> None:
     if type(ontology_id) is not int or ontology_id <= 0:
         raise AppError("本体工作空间编号无效", code="VALIDATION_FAILED", status_code=422)
     previous = session.info.get("ontology_id")
@@ -50,9 +52,10 @@ async def set_ontology_scope(session: AsyncSession, ontology_id: int) -> None:
             text("SELECT set_config('rengu.ontology_id', :ontology_id, true)"),
             {"ontology_id": str(ontology_id)},
         )
-        from app.common.sql_guard import load_governed_tables
+        if load_data_bindings:
+            from app.common.sql_guard import load_governed_tables
 
-        await load_governed_tables(session, ontology_id)
+            await load_governed_tables(session, ontology_id)
 
 
 @event.listens_for(Session, "after_begin")

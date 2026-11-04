@@ -3,7 +3,7 @@ import { definitionContext } from './definitionForms';
 import { staticContextKey, invalidateStaticAfterWrite } from './static';
 import type { DefinitionProperty } from './definitionForms';
 export interface ImportObject { table: string; id: string; name: string; api: string; group: string; datasource: string; pk: string; titleField?: string; desc: string; owner?: string; props: DefinitionProperty[] }
-export interface ImportPreview { datasourceId: string; schema: string; tables: { name: string; comment: string; pk: string[]; uniqueSets: string[][]; columns: { name: string; type: string; nullable: boolean; comment: string }[]; fks: { columns: string[]; refTable: string; refColumns: string[] }[] }[]; proposal: { objectTypes: ImportObject[]; linkTypes: { id: string; name: string; from: string; to: string; [key: string]: unknown }[] }; warnings: string[]; fingerprint: string; generator: string }
+export interface ImportPreview { datasourceId: string; schema: string; tables: { name: string; comment: string; kind?: 'table' | 'view'; pk: string[]; uniqueSets: string[][]; columns: { name: string; type: string; nullable: boolean; comment: string }[]; fks: { columns: string[]; refTable: string; refColumns: string[] }[] }[]; proposal: { objectTypes: ImportObject[]; linkTypes: { id: string; name: string; from: string; to: string; [key: string]: unknown }[] }; warnings: string[]; fingerprint: string; generator: string }
 const api = apiClient('data');
 const check = (key: string) => { if (key !== staticContextKey()) throw new Error('身份或版本已切换，请重新预览'); };
 export async function previewObjectImport(id: string, schema: string, tables: string[]) {

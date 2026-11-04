@@ -11,7 +11,7 @@ import { reviewFields, type ActionReview } from './actionReview';
  * 开关 dynamic 走真接口时（src/api/dynamic.ts）：列表 / 页签计数 / 详情（执行记录）/ 动作与外部系统下拉都取后台，
  * 确认提交、撤回、重新提交、对账一一调用对应接口，成功后用返回的详情刷新；否则保持原 mock 逻辑。
  */
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { fitColumns } from '@/tableColumns';
@@ -22,6 +22,7 @@ import AppPagination from '@/components/AppPagination.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
 import { usePagedQuery } from '@/composables/usePagedQuery';
+import { useDebouncedRef } from '@/composables/useDebouncedRef';
 import { paginate } from '@/mock/paginate';
 import {
   ACTIONS, ACTION_META, ACTION_NAMES, ACTION_SYSTEMS, OBJ_KIND_LABEL, hasObjRef, waitingText,
@@ -30,7 +31,7 @@ import {
 import { useAppStore } from '@/stores/app';
 import { isApiError } from '@/api/http';
 import {
-  dynamicApi, dynamicContextKey, listActionRuns, getActionRun, getActionMeta, confirmActionRun, approveActionRun, withdrawActionRun, resubmitActionRun, reconcileActionRun, deleteActionRun,
+  dynamicApi, dynamicContextKey, listActionRuns, getActionRun, getActionMeta, confirmActionRun, approveActionRun, withdrawActionRun, resubmitActionRun, reconcileActionRun, queryActionRunResult, deleteActionRun,
   listLaunchActions, listActionTargets, stageActionRun, validateActionLaunch, type LaunchAction,
   type ActionMetaDto, type ActionRunDetailDto, type ActionRunDto, type ActionTab, type ActionCan,
 } from '@/api/dynamic';
@@ -43,6 +44,15 @@ const LIST = ACTIONS;
 const REAL_API = dynamicApi.isReal();
 const live = computed(() => REAL_API);
 const readFail = (e: unknown) => fail(e);
+const queryingReceipt = ref(false);
+async function queryReceipt() {
+  const run = current.value, ctx = dynamicContextKey();
+  if (!live.value || !run?.can?.reconcile || readonly.value || queryingReceipt.value) return;
+  queryingReceipt.value = true;
+  try { const result = await queryActionRunResult(run.id); if (ctx === dynamicContextKey()) await afterWrite(result); }
+  catch (e) { if (ctx === dynamicContextKey()) fail(e); }
+  finally { queryingReceipt.value = false; }
+}
 const app = useAppStore();
 /** 当前用户：mock 固定王敏；真实接口由会话 Cookie 鉴权；前端仅显示当前登录用户，操作权限以服务端结果为准 */
 const ME = computed(() => REAL_API ? app.user.name : '王敏');
@@ -69,8 +79,9 @@ const actionName = ref('全部');
 const system = ref('全部');
 const status = ref('全部');
 const kw = ref('');
+const searchKw = useDebouncedRef(kw);
 watch(tab, () => { status.value = '全部'; pinned.value = undefined; });
-const pq = usePagedQuery({ defaultSize: 10, filters: [actionName, system, status, kw] });
+const pq = usePagedQuery({ defaultSize: 10, filters: [actionName, system, status, searchKw] });
 const listLoading = ref(false);
 
 /** 真接口状态：当前页、总数、页签计数、当前详情、动作元数据（动作 / 外部系统下拉、调用接口名） */
@@ -91,7 +102,7 @@ const executionImpact = (a: ActionRecord) => {
 const rows = computed(() => {
   if (live.value) return remote.items;
   const t = curTab.value;
-  const k = kw.value.trim();
+  const k = searchKw.value.trim();
   const list = LIST.filter((a) =>
     t.statuses.includes(a.status) &&
     (status.value === '全部' || a.status === status.value) &&
@@ -143,24 +154,33 @@ async function removeCurrent() {
 
 // ---- 真接口：取列表 / 详情 / 元数据 ----
 let listSeq = 0; let detailSeq = 0;
+let mounted = true;
+let listRequest: AbortController | undefined, detailRequest: AbortController | undefined, metaRequest: AbortController | undefined;
+onBeforeUnmount(() => { mounted = false; ++listSeq; ++detailSeq; listRequest?.abort(); detailRequest?.abort(); metaRequest?.abort(); });
 async function loadList() {
   const seq = ++listSeq, ctx = dynamicContextKey();
+  listRequest?.abort();
+  if (!mounted) return;
+  listRequest = new AbortController();
   listLoading.value = true;
   try {
-    const r = await listActionRuns({ tab: tab.value as ActionTab, status: status.value, action: actionName.value, sysId: system.value, kw: kw.value, page: pq.page.value, size: pq.size.value });
-    if (seq !== listSeq || ctx !== dynamicContextKey()) return;
+    const r = await listActionRuns({ tab: tab.value as ActionTab, status: status.value, action: actionName.value, sysId: system.value, kw: searchKw.value, page: pq.page.value, size: pq.size.value }, listRequest.signal);
+    if (!mounted || seq !== listSeq || ctx !== dynamicContextKey()) return;
     remote.items = r.items.map(toRec); remote.total = r.total; remote.counts = r.counts;
     if (r.page !== pq.page.value) pq.page.value = r.page;
-  } catch (e) { if (seq === listSeq && ctx === dynamicContextKey()) { remote.items = []; remote.total = 0; readFail(e); } }
-  finally { if (seq === listSeq) listLoading.value = false; }
+  } catch (e) { if (mounted && seq === listSeq && ctx === dynamicContextKey() && (e as Error)?.name !== 'AbortError') { remote.items = []; remote.total = 0; readFail(e); } }
+  finally { if (mounted && seq === listSeq) listLoading.value = false; }
 }
 async function loadDetail(id = selectedId.value) {
   const seq = ++detailSeq, ctx = dynamicContextKey();
+  detailRequest?.abort();
+  if (!mounted) return;
   if (!id) { remote.detail = null; return; }
+  detailRequest = new AbortController();
   try {
-    const d = await getActionRun(id);
-    if (seq === detailSeq && ctx === dynamicContextKey()) remote.detail = toRec(d);
-  } catch (e) { if (seq === detailSeq && ctx === dynamicContextKey()) { remote.detail = null; readFail(e); } }
+    const d = await getActionRun(id, detailRequest.signal);
+    if (mounted && seq === detailSeq && ctx === dynamicContextKey()) remote.detail = toRec(d);
+  } catch (e) { if (mounted && seq === detailSeq && ctx === dynamicContextKey() && (e as Error)?.name !== 'AbortError') { remote.detail = null; readFail(e); } }
 }
 /** 写操作成功后：用返回的详情直接刷新右侧，再重拉列表（状态、计数、页签都可能变） */
 async function afterWrite(d?: ActionRunDetailDto) {
@@ -170,12 +190,16 @@ async function afterWrite(d?: ActionRunDetailDto) {
   if (ctx !== dynamicContextKey()) { const changed = new Error('操作时上下文已切换'); changed.name = 'DynamicContextChanged'; throw changed; }
 }
 if (live.value) {
-  watch(dynamicContextKey, () => { ++listSeq; ++detailSeq; remote.items = []; remote.total = 0; remote.detail = null; remote.meta = null; pinned.value = undefined; }, { flush: 'sync' });
-  watch([dynamicContextKey, tab, actionName, system, status, kw, pq.page, pq.size], loadList, { immediate: true });
+  watch(dynamicContextKey, () => { ++listSeq; ++detailSeq; listRequest?.abort(); detailRequest?.abort(); metaRequest?.abort(); remote.items = []; remote.total = 0; remote.detail = null; remote.meta = null; pinned.value = undefined; }, { flush: 'sync' });
+  watch([dynamicContextKey, () => JSON.stringify([tab.value, actionName.value, system.value, status.value, searchKw.value]), pq.page, pq.size], (next, previous) => {
+    if (previous?.length && next[0] === previous[0] && next[1] !== previous[1] && pq.page.value !== 1) { ++listSeq; listRequest?.abort(); return; }
+    void loadList();
+  }, { immediate: true });
   watch([dynamicContextKey, selectedId], () => { loadDetail(); }, { immediate: true });
   watch(dynamicContextKey, async (ctx) => {
-    try { const m = await getActionMeta(); if (ctx === dynamicContextKey()) remote.meta = m; }
-    catch (e) { if (ctx === dynamicContextKey()) readFail(e); }
+    metaRequest?.abort(); const request = new AbortController(); metaRequest = request;
+    try { const m = await getActionMeta(request.signal); if (mounted && !request.signal.aborted && ctx === dynamicContextKey()) remote.meta = m; }
+    catch (e) { if (mounted && !request.signal.aborted && ctx === dynamicContextKey() && (e as Error)?.name !== 'AbortError') readFail(e); }
   }, { immediate: true });
 }
 
@@ -566,6 +590,7 @@ const terminalText = computed(() => {
         <template v-else-if="current.status === '结果未知'">
           <span class="t-14 c-3 ac-foot-note">{{ current.dispatchPhase === 'queued' ? '已排队，等待执行' : current.dispatchPhase === 'claimed' ? '正在调用外部系统' : '按幂等键查询外部结果，可登记人工核对结论' }}</span>
           <a-tooltip :title="current.can?.reasons.reconcile"><a-button type="primary" :disabled="live && !current.can?.reconcile" @click="reconOpen = true">发起对账</a-button></a-tooltip>
+          <a-button v-if="live" :disabled="readonly || !current.can?.reconcile || queryingReceipt" :loading="queryingReceipt" @click="queryReceipt">查询幂等回执</a-button>
         </template>
 
         <span v-else class="t-14 c-3">{{ terminalText }}</span>

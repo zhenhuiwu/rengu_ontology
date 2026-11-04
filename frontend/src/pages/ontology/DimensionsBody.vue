@@ -88,14 +88,23 @@ const q = (k: string) => (route.query[k] as string) || '';
 const setQ = (patch: Record<string, string | undefined>) => router.replace({ query: { ...route.query, ...patch } });
 const kw = computed({ get: () => q('q'), set: (v) => setQ({ q: v || undefined }) });
 const kind = computed({ get: () => q('k') || 'all', set: (v) => setQ({ k: v === 'all' ? undefined : v }) });
-const grp = computed({ get: () => q('g'), set: (v) => setQ({ g: v || undefined }) });
-const GROUP_OPTIONS = computed(() => [{ value: '', label: '全部分组' }, ...(isStaticReal() ? (dimensionPage.extra.value.groups as string[] ?? []) : [...new Set(visible.value.map((d) => d.group))]).map((g) => ({ value: g, label: g }))]);
+const grp = computed({ get: () => q('g') || '', set: (v) => setQ({ g: v || undefined }) });
+const GROUP_LABELS: Record<string, string> = { ENUM: '枚举', STRUCT: '结构', DERIVED: '派生', TIME: '时间', GEO: '地理', ORG: '组织' };
+const GROUP_OPTIONS = computed(() => {
+  const raw = isStaticReal()
+    ? (dimensionPage.extra.value.groups as string[] ?? [])
+    : [...new Set(visible.value.map((d) => d.group))];
+  return [
+    { value: '', label: '全部分组' },
+    ...raw.filter(Boolean).map((g) => ({ value: g, label: GROUP_LABELS[g] ?? g })),
+  ];
+});
 const KIND_OPTIONS = [{ label: '全部', value: 'all' }, { label: '维度', value: '维度' }, { label: '码表', value: '码表' }];
 const filtered = computed(() => visible.value.filter((d) =>
   (kind.value === 'all' || d.kind === kind.value) && (!grp.value || d.group === grp.value)
   && (!kw.value || d.name.includes(kw.value) || d.api.includes(kw.value) || d.objectName.includes(kw.value)
     || d.values.some((v) => v.name.includes(kw.value) || v.synonyms.includes(kw.value)))));
-const LPAGE = isStaticReal() ? 10 : 18;
+const LPAGE = isStaticReal() ? 16 : 18;
 const lpage = ref(Number(q('lp')) || 1);
 watch([kw, kind, grp], () => { lpage.value = 1; });
 watch(lpage, (p) => { if (String(p) !== (q('lp') || '1')) setQ({ lp: p > 1 ? String(p) : undefined }); });
@@ -477,13 +486,13 @@ const DEF_ITEMS = computed(() => {
   const d = cur.value;
   if (!d) return [];
   return [
-    { k: '取值来源', v: d.valueSrc }, { k: '同步方式', v: d.sync },
+    { k: '取值来源', v: d.valueSrc }, { k: '同步说明', v: d.sync },
     { k: '物理字段', v: before.value?.column ?? d.column, num: true }, { k: '负责人', v: d.owner },
     { k: '生效版本', v: (() => {
       const last = d.history.find((h) => h.cr && h.status !== '草稿' && (!ver.value || h.ver <= ver.value));
       return `随本体发布 ${d.since} 生效${last && last.ver !== d.since ? `，最近一次 ${last.ver}（${last.cr}）` : ''}`;
     })() },
-    { k: '分组', v: d.group },
+    { k: '分组', v: GROUP_LABELS[d.group] ?? (d.group || '未分组') },
   ];
 });
 const levelCols = [
@@ -495,7 +504,13 @@ const CHECKS = computed(() => {
   const vals = valueRows.value;
   const dupCode = vals.find((v, i) => vals.findIndex((x) => x.level === v.level && x.code === v.code) !== i);
   rows.push(dupCode ? { code: 'V5', name: '取值唯一', result: '阻断', note: `编码 ${dupCode.code} 重复` } : { code: 'V5', name: '取值唯一', result: '通过', note: `${vals.length} 个取值，同一层级编码和名称不重复` });
-  rows.push(isStaticReal() && !cur.value?.object ? { code: 'V6', name: '默认层级', result: '通过', note: '独立码表按取值和说法匹配' } : levels.value.some((l) => l.name === qa.value.defaultLevel) ? { code: 'V6', name: '默认层级', result: '通过', note: `问数未指明层级时按“${qa.value.defaultLevel}”` } : { code: 'V6', name: '默认层级', result: '阻断', note: '默认层级不在层级里' });
+  rows.push(isStaticReal() && !cur.value?.object
+    ? { code: 'V6', name: '默认层级', result: '通过', note: '独立码表按取值和说法匹配' }
+    : !levels.value.length
+      ? { code: 'V6', name: '默认层级', result: '通过', note: '单层维度，无需默认层级' }
+      : levels.value.some((l) => l.name === qa.value.defaultLevel)
+        ? { code: 'V6', name: '默认层级', result: '通过', note: `问数未指明层级时按“${qa.value.defaultLevel}”` }
+        : { code: 'V6', name: '默认层级', result: '阻断', note: '默认层级不在层级里' });
   rows.push(isStaticReal() && mapsPage.extra.value.conflictCount === undefined ? { code: 'V9', name: '同义词歧义', result: '警告', note: '尚未取得说法检查结果' } : conflictCount.value ? { code: 'V9', name: '同义词歧义', result: '警告', note: `${conflictCount.value} 个说法有歧义，已写处理方式的不阻断发布` } : { code: 'V9', name: '同义词歧义', result: '通过', note: '没有重名的说法' });
   const off = vals.filter((v) => v.status === '停用' && (v.count ?? 0) > 0);
   rows.push(off.length ? { code: 'V12', name: '停用取值', result: '警告', note: `${off.map((v) => v.name).join('、')} 已停用但仍有数据` } : { code: 'V12', name: '停用取值', result: '通过', note: '停用的取值没有当前数据' });
@@ -588,26 +603,26 @@ onBeforeUnmount(() => { ++definitionSeq; });
   </Teleport>
 
   <div class="dm">
-    <div class="panel dm-list">
+    <div class="panel dm-list side-list">
       <div class="dm-filter">
         <a-input-search :value="kw" placeholder="搜索名称、API 名、对象或取值" allow-clear @change="(e: any) => (kw = e.target.value)" />
         <div class="dm-selects">
-          <a-segmented v-model:value="kind" :options="KIND_OPTIONS" size="small" />
-          <a-select v-model:value="grp" :options="GROUP_OPTIONS" size="small" class="dm-sel" />
+          <a-segmented v-model:value="kind" :options="KIND_OPTIONS" />
+          <a-select v-if="GROUP_OPTIONS.length > 1" v-model:value="grp" :options="GROUP_OPTIONS" class="dm-sel" />
         </div>
       </div>
       <a-alert v-if="dimensionPage.error.value || definitionError" type="error" :message="dimensionPage.error.value || definitionError" show-icon />
       <div v-if="dimensionPage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
-      <ul class="dm-items" :aria-busy="dimensionPage.loading.value">
-        <li v-for="d in list" :key="d.id" :class="{ active: d.id === cur?.id }" :title="`${d.name} · ${d.kind === '维度' ? levelText(d) : d.attr} · ${isStaticReal() ? (d as any).valueCount ?? '—' : d.values.filter((v) => live(v, ver) && !v.draft).length} 个取值`" @click="pick(d.id)">
-          <div class="dm-row">
-            <span class="t-14 dm-name dm-ell">{{ d.name }}</span>
-            <span v-if="hasDraft(d)" class="t-12 c-3">有草稿</span>
-            <span v-else class="t-12 c-3">{{ d.kind }}</span>
+      <ul class="dm-items side-list-items" :aria-busy="dimensionPage.loading.value">
+        <li v-for="d in list" :key="d.id" class="side-list-item" :class="{ active: d.id === cur?.id }" :title="`${d.name} · ${d.kind === '维度' ? levelText(d) : d.attr} · ${isStaticReal() ? (d as any).valueCount ?? '—' : d.values.filter((v) => live(v, ver) && !v.draft).length} 个取值`" @click="pick(d.id)">
+          <div class="dm-row side-list-row">
+            <span class="t-14 dm-name dm-ell side-list-name">{{ d.name }}</span>
+            <span v-if="hasDraft(d)" class="t-12 c-3 side-list-meta">有草稿</span>
+            <span v-else class="t-12 c-3 side-list-meta">{{ d.id === 'time' ? '按时间派生' : isStaticReal() ? `${(d as any).valueCount ?? 0} 个取值` : `${d.values.filter((v) => live(v, ver) && !v.draft).length} 个取值` }}</span>
           </div>
         </li>
       </ul>
-      <div class="dm-foot">
+      <div class="dm-foot side-list-foot">
         <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" unit="项" class="dm-pager" empty-text="没有匹配的维度或码表" />
       </div>
     </div>
@@ -640,7 +655,7 @@ onBeforeUnmount(() => { ++definitionSeq; });
       <!-- 定义 -->
       <div v-if="tab === 'def'" class="dm-body dm-def">
         <div class="dm-def-left">
-          <a-descriptions :column="2" bordered size="small" class="dm-desc">
+          <a-descriptions :column="1" bordered size="small" class="dm-desc">
             <a-descriptions-item label="显示名">{{ cur.name }}</a-descriptions-item>
             <a-descriptions-item label="API 名"><span class="num">{{ cur.api }}</span></a-descriptions-item>
             <a-descriptions-item label="来源对象">
@@ -649,13 +664,13 @@ onBeforeUnmount(() => { ++definitionSeq; });
             </a-descriptions-item>
             <a-descriptions-item label="来源属性">{{ curAttr }}</a-descriptions-item>
             <a-descriptions-item v-for="d in DEF_ITEMS" :key="d.k" :label="d.k"><span :class="{ num: d.num }">{{ d.v }}</span></a-descriptions-item>
-            <a-descriptions-item label="说明" :span="2">{{ curDesc }}</a-descriptions-item>
+            <a-descriptions-item label="说明">{{ curDesc }}</a-descriptions-item>
           </a-descriptions>
           <div class="dm-sec t-14 fw-600 dm-sec-row">
             <span>层级</span>
             <span class="t-12 c-3 fw-400">{{ levels.length > 1 ? `从上到下逐级下钻：${levels.map((l) => l.name).join(' › ')}` : '单层' }}{{ before ? `（${before.ver} 起改为 ${cur.levels.map((l) => l.name).join(' › ')}）` : '' }}</span>
           </div>
-          <a-table :columns="levelCols" :data-source="levels" :pagination="false" size="small" row-key="api">
+          <a-table v-if="levels.length" :columns="levelCols" :data-source="levels" :pagination="false" size="small" row-key="api">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'name'">
                 <span class="dm-nowrap"><span class="c-1">{{ record.name }}</span><a-tag v-if="record.name === qa.defaultLevel" class="dm-tag-gap">问数默认</a-tag></span>
@@ -868,20 +883,15 @@ onBeforeUnmount(() => { ++definitionSeq; });
 
 <style scoped>
 .dm { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.dm-list { width: 300px; flex: none; }
+.dm-list { flex: none; }
 .dm-filter { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 8px; flex: none; }
 .dm-selects { display: flex; gap: 8px; align-items: center; }
 .dm-sel { flex: 1; min-width: 0; }
-.dm-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
-.dm-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
-.dm-items li:hover { background: var(--g3); }
-.dm-items li.active { background: var(--brand-bg); }
-.dm-items li.active .dm-name { color: var(--brand); }
+.dm-items { flex: 1; min-height: 0; }
 .dm-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .dm-ell { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dm-ell1 { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dm-pager { flex: 1; min-height: 0; }
-.dm-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; justify-content: space-between; }
 .dm-detail { flex: 1; min-width: 0; }
 .dm-head { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; flex: none; }
 .dm-sp { flex: 1; }

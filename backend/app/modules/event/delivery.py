@@ -316,7 +316,8 @@ async def discover(session, event_code: str | None = None) -> None:
                 )
             )
         if not subscribers:
-            event.outcome, event.summary = EventOutcome.failed, "未投递：入站定义没有订阅方"
+            # An event type without subscribers is inert, not a failed delivery.
+            event.outcome, event.summary = EventOutcome.delivered, "无订阅方，无需投递"
         else:
             await session.flush()
             await aggregate(session, event)
@@ -424,6 +425,8 @@ async def prepare(session, delivery_id: int) -> bool:
         ):
             raise Unavailable("DELIVERY_SNAPSHOT_INCOMPLETE")
         fields = [FieldOut.model_validate(f) for f in event.definition_snapshot["payload"]]
+        from app.modules.governance.dynamic_guard import delivery_payload
+        await delivery_payload(session, event, delivery)
         try:
             matched = filter_matches(delivery.subscription.get("filter", ""), fields, event.payload or {})
         except Unavailable:
@@ -552,6 +555,9 @@ async def execute(session, delivery_id: int) -> None:
         )
         if started is None or (started.detail or {}).get("routeFingerprint") != route_fingerprint(route):
             raise Unavailable("DELIVERY_ROUTE_BINDING_CHANGED")
+        from app.modules.governance.dynamic_guard import delivery_payload
+        await delivery_payload(session, event, delivery,
+            "external" if not (route.get("rule_code") or route.get("action_type")) else "filter")
         if route.get("action_type") and route.get("rule_code"):
             raise Unavailable("DELIVERY_ROUTE_CONFLICT")
         if route.get("rule_code"):

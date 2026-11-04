@@ -15,10 +15,10 @@
 - 组 Group：{"and": [...]} 或 {"or": [...]}，可嵌套，最多 MAX_DEPTH 层
 - 单个角色的空表达式 / null = 该角色不限制（只有明确配置为「全部」的角色才会是空）；
   一个用户**没有任何**带范围的角色 → 什么都看不到（combine_or([]) = 拒绝，宁严勿宽）
-- 跨对象一跳：field 写成 `<关系id>.<目标对象属性>`（如 `order_belongs_to_store.region`），
+- 跨对象最多四跳：field 写成 `<稳定关系id>...<目标对象属性>`，
   关系必须来自**静态的关系定义**（LINKS：from / to / fromProp / toProp），用 link_paths_from_definitions()
   生成白名单；编译成 `EXISTS (SELECT 1 FROM 目标 WHERE 目标.toProp = 本表.fromProp AND 条件)`，值走绑定参数。
-  多跳（两个点）或未声明的关系直接拒绝。
+  多跳必须来自同一本体的已发布真实受控绑定；超限或未声明的关系直接拒绝。
 
 转 SQL：`to_sql(expr, columns, user_attrs)`
 - columns 是**白名单** {field: SQLAlchemy 列}，不在白名单里的字段直接报错；
@@ -27,11 +27,11 @@
 前端 mock 的 RowScope{objType, prop, op: '=' | '∈', values} 用 `from_row_scope()` 转换。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import Field, model_validator
-from sqlalchemy import ColumnElement, FromClause, Select, and_, exists, false, or_, select, true
+from sqlalchemy import ColumnElement, FromClause, Select, and_, false, or_, true
 
 from app.core.errors import AppError
 from app.core.schema import ApiModel
@@ -42,8 +42,8 @@ _OP_ALIASES = {"∈": "in", "∉": "not_in", "≠": "!=", "≥": ">=", "≤": "<
 
 
 class Condition(ApiModel):
-    # 本表字段，或一跳 `<关系id>.<目标属性>`；两个点（多跳）在校验时就拒绝
-    field: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
+    # 本表字段，或最多四跳稳定关系路径。
+    field: str = Field(pattern=r"^(?:[A-Za-z_][A-Za-z0-9_-]{0,63}\.){0,4}[A-Za-z_][A-Za-z0-9_]{0,63}$")
     op: Op
     value: Any = None
     value_from: str | None = Field(default=None, pattern=r"^user\.[A-Za-z_][A-Za-z0-9_]*$")
@@ -125,6 +125,11 @@ class LinkPath:
     target: FromClause
     target_key: ColumnElement
     target_columns: dict[str, ColumnElement]
+    target_links: dict[str, "LinkPath"] = field(default_factory=dict)
+    ontology_id: int | None = None
+    source_scope: str = "ontology_id"
+    target_scope: str = "ontology_id"
+    target_object: str | None = None
 
 
 def link_paths_from_definitions(
@@ -174,20 +179,9 @@ def to_sql(
     if isinstance(expr, OrGroup):
         return or_(*(to_sql(c, columns, user_attrs, links) for c in expr.or_))
     if "." in expr.field:
-        link_id, prop = expr.field.split(".", 1)
-        link = (links or {}).get(link_id)
-        if link is None:
-            raise _bad(expr.field, "引用的关系没有在静态关系定义里声明（或不是一跳）")
-        col = link.target_columns.get(prop)
-        if col is None:
-            raise _bad(expr.field, "不在目标对象的白名单")
-        inner = _cond(expr, col, user_attrs)
-        return exists(
-            select(1)
-            .select_from(link.target)
-            .where(link.target_key == link.local, inner)
-            .correlate_except(link.target)
-        )
+        from app.common.relation_resolver import path_predicate
+
+        return path_predicate(expr, columns, links or {}, user_attrs)
     col = columns.get(expr.field)
     if col is None:
         raise _bad(expr.field, "不在白名单")
@@ -304,6 +298,9 @@ async def apply_row_filter(
     links 由 link_paths_from_definitions(静态关系定义) 生成；不传则不允许跨对象字段。
     """
     from app.common.auth import row_filter  # 避免循环导入
+    from app.modules.governance.query_guard import check_statement
+
+    await check_statement(stmt, user, object_type, columns)
 
     expr = await row_filter(user, object_type)
     if expr is None:

@@ -166,6 +166,7 @@ class ActionRun(CodeMixin, MutableTableMixin, Base):
     )
     action_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="动作名称（前端 action）")
     type_version: Mapped[str | None] = mapped_column(String(16))
+    data_purpose: Mapped[str | None] = mapped_column(String(64), comment="提交时显式声明的数据用途，执行时重新授权")
     source_type: Mapped[SourceType] = mapped_column(enum_column(SourceType, 16), nullable=False)
     source_label: Mapped[str] = mapped_column(String(16), nullable=False, comment="来源原文")
     rule_code: Mapped[str | None] = mapped_column(

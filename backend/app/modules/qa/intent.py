@@ -35,7 +35,7 @@ async def action_catalog(session: AsyncSession, user: Any, request: Any = None) 
     当前版本已发布 / 变更中、已绑定对象、调用者有动作类型查看权限；带执行策略（action.policy 公开读）。
     看不到该节（omitted）/ 目标对象一行都看不到 / 读失败 → 不列。不再自建动作目录。
     """
-    from app.modules.static.capabilities import capabilities
+    from app.modules.qa.capability_context import capabilities
 
     try:
         async with session.begin_nested():  # savepoint：读失败不弄坏请求事务

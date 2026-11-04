@@ -68,11 +68,20 @@ def require_same_origin(request: Request) -> None:
     """Strict Origin on browser writes, including login; bearer API keys use their own auth."""
     origin = request.headers.get("origin")
     s = get_settings()
+    if not origin or origin == "null":
+        raise AppError("请求来源校验失败，请刷新登录页重试", code="CSRF_ORIGIN_REJECTED", status_code=403)
+    if s.auth_allow_any_origin:
+        # Dev/intranet escape hatch: still require a browser-supplied http(s) Origin,
+        # but do not pin it to a preconfigured IP list.
+        parsed = urlsplit(origin)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise AppError("请求来源无效", code="CSRF_ORIGIN_REJECTED", status_code=403)
+        return
     allowed = {str(request.base_url).rstrip("/"), *s.auth_allowed_origins}
     # The checked-in Vite proxy runs on loopback :5280 and changes Host to :8000.
     if s.env == "dev" and request.url.hostname in ("127.0.0.1", "localhost", "::1"):
         allowed.update({"http://127.0.0.1:5280", "http://localhost:5280"})
-    if not origin or origin == "null" or origin not in allowed:
+    if origin not in allowed:
         raise AppError("请求来源校验失败，请刷新登录页重试", code="CSRF_ORIGIN_REJECTED", status_code=403)
     parsed = urlsplit(origin)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:

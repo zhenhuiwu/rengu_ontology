@@ -9,6 +9,8 @@ from app.common.sql_guard import ensure_governed_tables, governed_tables
 
 async def scoped_instances(session, statement, user, kind_column, identity_column):
     # Read-side visibility only. Internal idempotency/dedupe queries deliberately bypass this helper.
+    from app.modules.governance.dynamic_guard import scope
+    statement = await scope(session, user, statement, getattr(kind_column, "class_", None))
     deleted = getattr(getattr(kind_column, "class_", None), "deleted_at", None)
     if deleted is not None:
         statement = statement.where(deleted.is_(None))
@@ -44,6 +46,9 @@ async def visible_references(session, user, references):
         g.object_type: g for g in governed_tables(user.ontology_id, session).values() if not g.inherit
     }
     for kind, codes in grouped.items():
+        from app.modules.governance.policy import plain_reference
+        if not await plain_reference(session, user, kind):
+            continue
         mapping = mappings.get(kind)
         if mapping is None or mapping.row_identity not in mapping.table.c:
             continue

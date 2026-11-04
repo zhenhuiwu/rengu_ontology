@@ -10,13 +10,14 @@ import { validateActionLaunch } from '@/api/dynamic';
  * 「AI 处置建议」（真接口才有）：GET /alerts/{id}/decision 取最近一条决策评估（告警产生后规则身份自动评估，或手动生成），
  * 只给建议；采用建议 = 预填参数后走原有发起动作 / 动作中心暂存流程，由人确认。
  */
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { fitColumns } from '@/tableColumns';
 import ObjRef from '@/components/ObjRef.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagedQuery } from '@/composables/usePagedQuery';
+import { useDebouncedRef } from '@/composables/useDebouncedRef';
 import HoverCard from '@/components/HoverCard.vue';
 import { useConfirmStore } from '@/stores/confirm';
 import { useReadonly } from '@/composables/useReadonly';
@@ -73,11 +74,12 @@ const tab = computed({
 const level = ref('全部');
 const ruleId = ref('全部');
 const kw = ref('');
+const searchKw = useDebouncedRef(kw);
 /** 真接口分面筛选：对象类型、维度值（objKind:id 多选），选项和计数来自 GET /alerts/facets */
 const objKind = ref('全部');
 const dimSel = ref<string[]>([]);
 /** 分页进 URL（?page=&size=），一屏 12 条；筛选变化回到第 1 页 */
-const pq = usePagedQuery({ defaultSize: 10, filters: [level, ruleId, kw, objKind, dimSel] });
+const pq = usePagedQuery({ defaultSize: 10, filters: [level, ruleId, searchKw, objKind, dimSel] });
 const page = pq.page;
 const pageSize = pq.size;
 
@@ -104,7 +106,7 @@ const rows = computed(() => {
     t.match(a.status) &&
     (level.value === '全部' || a.level === level.value) &&
     (ruleId.value === '全部' || a.ruleId === ruleId.value) &&
-    (!kw.value || a.id.includes(kw.value) || a.objLabel.includes(kw.value)),
+    (!searchKw.value || a.id.includes(searchKw.value) || a.objLabel.includes(searchKw.value)),
   );
 });
 
@@ -192,36 +194,52 @@ const approverOf = (r: AlertRuleDto | null) => (live.value ? remote.detail?.appr
 // ---- 真接口：取列表 / 详情 ----
 const alertQuery = () => ({
   status: (TABS.some((t) => t.key === tab.value) ? tab.value : 'all') as AlertTab,
-  level: level.value, ruleId: ruleId.value, kw: kw.value, objKind: objKind.value, dim: dimSel.value,
+  level: level.value, ruleId: ruleId.value, kw: searchKw.value, objKind: objKind.value, dim: dimSel.value,
 });
 let listSeq = 0; let detailSeq = 0;
+let mounted = true;
+let listRequest: AbortController | undefined, detailRequest: AbortController | undefined, facetRequest: AbortController | undefined;
+let metaRequest: AbortController | undefined, decisionRequest: AbortController | undefined, peopleRequest: AbortController | undefined;
+onBeforeUnmount(() => {
+  mounted = false; ++listSeq; ++detailSeq; ++facetSeq; ++decisionSeq; ++peopleSeq;
+  for (const request of [listRequest, detailRequest, facetRequest, metaRequest, decisionRequest, peopleRequest]) request?.abort();
+});
 async function loadList() {
   const seq = ++listSeq, ctx = dynamicContextKey();
+  listRequest?.abort();
+  if (!mounted) return;
+  listRequest = new AbortController();
   listLoading.value = true;
   try {
-    const r = await listAlerts({ ...alertQuery(), page: page.value, size: pageSize.value });
-    if (seq !== listSeq || ctx !== dynamicContextKey()) return;
+    const r = await listAlerts({ ...alertQuery(), page: page.value, size: pageSize.value }, listRequest.signal);
+    if (!mounted || seq !== listSeq || ctx !== dynamicContextKey()) return;
     remote.items = r.items.map(toRow); remote.total = r.total; remote.counts = r.counts;
     if (r.page !== page.value) page.value = r.page;
     remote.items.forEach((a) => seen.set(a.id, a));
-  } catch (e) { if (seq === listSeq && ctx === dynamicContextKey()) { remote.items = []; remote.total = 0; readFail(e); } }
-  finally { if (seq === listSeq) listLoading.value = false; }
+  } catch (e) { if (mounted && seq === listSeq && ctx === dynamicContextKey() && (e as Error)?.name !== 'AbortError') { remote.items = []; remote.total = 0; readFail(e); } }
+  finally { if (mounted && seq === listSeq) listLoading.value = false; }
 }
 let facetSeq = 0;
 async function loadFacets() {
   const seq = ++facetSeq, ctx = dynamicContextKey();
+  facetRequest?.abort();
+  if (!mounted) return;
+  facetRequest = new AbortController();
   try {
-    const f = await getAlertFacets(alertQuery());
-    if (seq === facetSeq && ctx === dynamicContextKey()) facets.value = f;
-  } catch (e) { if (seq === facetSeq && ctx === dynamicContextKey()) { facets.value = null; readFail(e); } }
+    const f = await getAlertFacets(alertQuery(), facetRequest.signal);
+    if (mounted && seq === facetSeq && ctx === dynamicContextKey()) facets.value = f;
+  } catch (e) { if (mounted && seq === facetSeq && ctx === dynamicContextKey() && (e as Error)?.name !== 'AbortError') { facets.value = null; readFail(e); } }
 }
 async function loadDetail(id = selectedId.value) {
   const seq = ++detailSeq, ctx = dynamicContextKey();
+  detailRequest?.abort();
+  if (!mounted) return;
   if (!id) { remote.detail = null; return; }
+  detailRequest = new AbortController();
   try {
-    const d = await getAlert(id);
-    if (seq === detailSeq && ctx === dynamicContextKey()) remote.detail = toDetail(d);
-  } catch (e) { if (seq === detailSeq && ctx === dynamicContextKey()) { remote.detail = null; readFail(e); } }
+    const d = await getAlert(id, detailRequest.signal);
+    if (mounted && seq === detailSeq && ctx === dynamicContextKey()) remote.detail = toDetail(d);
+  } catch (e) { if (mounted && seq === detailSeq && ctx === dynamicContextKey() && (e as Error)?.name !== 'AbortError') { remote.detail = null; readFail(e); } }
 }
 /** 写操作成功后：用返回的详情直接刷新右侧，再重拉列表（状态、计数、页签都可能变） */
 async function afterWrite(d?: AlertDetailDto) {
@@ -231,14 +249,18 @@ async function afterWrite(d?: AlertDetailDto) {
   if (ctx !== dynamicContextKey()) { const changed = new Error('操作时上下文已切换'); changed.name = 'DynamicContextChanged'; throw changed; }
 }
 if (live.value) {
-  watch(dynamicContextKey, () => { ++listSeq; ++detailSeq; remote.items = []; remote.total = 0; remote.detail = null; remote.people = []; ruleOptions.value = []; facets.value = null; objKind.value = '全部'; dimSel.value = []; seen.clear(); pinned.value = undefined; selectedKeys.value = []; }, { flush: 'sync' });
-  watch([dynamicContextKey, tab, level, ruleId, kw, objKind, dimSel, page, pageSize], loadList, { immediate: true, deep: true });
-  watch([dynamicContextKey, tab, level, ruleId, kw, objKind, dimSel], loadFacets, { immediate: true, deep: true });
+  watch(dynamicContextKey, () => { ++listSeq; ++detailSeq; for (const request of [listRequest, detailRequest, facetRequest, metaRequest, decisionRequest, peopleRequest]) request?.abort(); remote.items = []; remote.total = 0; remote.detail = null; remote.people = []; ruleOptions.value = []; facets.value = null; objKind.value = '全部'; dimSel.value = []; seen.clear(); pinned.value = undefined; selectedKeys.value = []; }, { flush: 'sync' });
+  watch([dynamicContextKey, () => JSON.stringify([tab.value, level.value, ruleId.value, searchKw.value, objKind.value, dimSel.value]), page, pageSize], (next, previous) => {
+    if (previous?.length && next[0] === previous[0] && next[1] !== previous[1] && page.value !== 1) { ++listSeq; listRequest?.abort(); return; }
+    void loadList();
+  }, { immediate: true });
+  watch([dynamicContextKey, tab, level, ruleId, searchKw, objKind, dimSel], loadFacets, { immediate: true, deep: true });
   watch([dynamicContextKey, selectedId], () => { loadDetail(); }, { immediate: true });
   watch(dynamicContextKey, async (ctx) => {
-    const results = await Promise.allSettled([getAlertMeta()]);
-    if (ctx !== dynamicContextKey()) return;
-    if (results[0].status === 'fulfilled') ruleOptions.value = results[0].value.rules; else readFail(results[0].reason);
+    metaRequest?.abort(); const request = new AbortController(); metaRequest = request;
+    const results = await Promise.allSettled([getAlertMeta(request.signal)]);
+    if (!mounted || request.signal.aborted || ctx !== dynamicContextKey()) return;
+    if (results[0].status === 'fulfilled') ruleOptions.value = results[0].value.rules; else if ((results[0].reason as Error)?.name !== 'AbortError') readFail(results[0].reason);
   }, { immediate: true });
 }
 
@@ -276,8 +298,10 @@ async function claim() {
 // 转派
 const transferTo = ref<string>();
 const transferOpen = ref(false);
+const peopleLoading = ref(false), peopleError = ref('');
 async function doTransfer() {
   const a = current.value; if (!a || !transferTo.value) return;
+  if (REAL_API && (!transferOpen.value || peopleLoading.value || peopleError.value || !remote.people.some(person => person.id === transferTo.value))) return;
   pinned.value = a.id;
   if (REAL_API) {
     try { await afterWrite(await transferAlert(a.id, transferTo.value)); transferOpen.value = false; transferTo.value = undefined; message.success('已转派'); } catch (e) { fail(e); }
@@ -401,14 +425,16 @@ const decision = ref<DecisionDto | null>(null), decisionLoading = ref(false);
 let decisionSeq = 0;
 async function loadDecision(evaluate = false) {
   const seq = ++decisionSeq, ctx = dynamicContextKey(), id = selectedId.value;
+  decisionRequest?.abort();
   if (!evaluate) decision.value = null;
-  if (!live.value || !id) return;
+  if (!mounted || !live.value || !id) return;
+  const request = evaluate ? undefined : new AbortController(); decisionRequest = request;
   decisionLoading.value = true;
   try {
-    const r = evaluate ? await evaluateAlertDecision(id) : await getAlertDecision(id);
-    if (seq === decisionSeq && ctx === dynamicContextKey()) decision.value = r.decision;
-  } catch (e) { if (seq === decisionSeq && ctx === dynamicContextKey()) { if (!evaluate) decision.value = null; readFail(e); } }
-  finally { if (seq === decisionSeq) decisionLoading.value = false; }
+    const r = evaluate ? await evaluateAlertDecision(id) : await getAlertDecision(id, request?.signal);
+    if (mounted && seq === decisionSeq && ctx === dynamicContextKey()) decision.value = r.decision;
+  } catch (e) { if (mounted && seq === decisionSeq && ctx === dynamicContextKey() && (e as Error)?.name !== 'AbortError') { if (!evaluate) decision.value = null; readFail(e); } }
+  finally { if (mounted && seq === decisionSeq) decisionLoading.value = false; }
 }
 watch([dynamicContextKey, selectedId], () => { loadDecision(); }, { immediate: true });
 const decisionBy = (d: DecisionDto) => d.caller?.kind === 'system' ? `规则 ${d.caller.system?.ruleId ?? ''} 自动评估` : (d.caller?.name || '手动生成');
@@ -430,15 +456,25 @@ function adopt(r: DecisionRecommendation) {
   router.push({ path: '/use/ops/actions', query: { ontology: app.ontologyId, launch: b.typeId, launchObj: b.objId ?? undefined, launchParams: b.params } });
 }
 let peopleSeq = 0;
-watch([dynamicContextKey, selectedId], async () => {
+watch([dynamicContextKey, selectedId], () => {
   transferOpen.value = false; transferTo.value = undefined; closeOpen.value = false; batchCloseOpen.value = false; actionOpen.value = false; actionParamsText.value = '{}'; closeReason.value = '';
-  if (!live.value) return;
-  const seq = ++peopleSeq, ctx = dynamicContextKey(), id = selectedId.value;
-  remote.people = [];
-  if (!id) return;
-  try { const result = await listPeople(id); if (seq === peopleSeq && ctx === dynamicContextKey()) remote.people = result; }
-  catch (e) { if (seq === peopleSeq && ctx === dynamicContextKey()) readFail(e); }
+  ++peopleSeq; peopleRequest?.abort(); remote.people = []; peopleLoading.value = false; peopleError.value = '';
 }, { immediate: true });
+async function loadPeople() {
+  const seq = ++peopleSeq, ctx = dynamicContextKey(), id = selectedId.value;
+  peopleRequest?.abort(); remote.people = []; peopleError.value = ''; transferTo.value = undefined;
+  if (!mounted || !live.value || !transferOpen.value || !id) return;
+  peopleRequest = new AbortController();
+  peopleLoading.value = true;
+  const current = () => mounted && seq === peopleSeq && ctx === dynamicContextKey() && id === selectedId.value && transferOpen.value;
+  try { const result = await listPeople(id, peopleRequest.signal); if (current()) remote.people = result; }
+  catch (e) { if (current() && (e as Error)?.name !== 'AbortError') { peopleError.value = isApiError(e) ? e.message : e instanceof Error ? e.message : String(e); readFail(e); } }
+  finally { if (seq === peopleSeq) peopleLoading.value = false; }
+}
+watch(transferOpen, open => {
+  if (open) void loadPeople();
+  else { ++peopleSeq; peopleRequest?.abort(); peopleLoading.value = false; transferTo.value = undefined; }
+});
 </script>
 
 <template>
@@ -561,8 +597,9 @@ watch([dynamicContextKey, selectedId], async () => {
           <a-popover v-model:open="transferOpen" trigger="click" placement="topRight">
             <template #content>
               <div class="al-pop">
-                <a-select v-model:value="transferTo" placeholder="转派给" :options="people.filter((p) => live ? p.id !== current!.assigneeId : p.name !== current!.assignee).map((p) => ({ value: p.id, label: live ? `${p.name}（${p.id}）` : p.name }))" />
-                <div class="al-pop-foot"><a-button size="small" type="primary" :disabled="!transferTo" @click="doTransfer">转派</a-button></div>
+                <a-alert v-if="peopleError" type="error" :message="peopleError" show-icon><template #action><a-button size="small" @click="loadPeople">重试</a-button></template></a-alert>
+                <a-select v-model:value="transferTo" placeholder="转派给" :loading="peopleLoading" :disabled="peopleLoading || !!peopleError" :options="people.filter((p) => live ? p.id !== current!.assigneeId : p.name !== current!.assignee).map((p) => ({ value: p.id, label: live ? `${p.name}（${p.id}）` : p.name }))" />
+                <div class="al-pop-foot"><a-button size="small" type="primary" :disabled="!transferTo || peopleLoading || !!peopleError" @click="doTransfer">转派</a-button></div>
               </div>
             </template>
             <a-tooltip :title="locked ? `关联动作${current.actionStatus}，有结果前不能转派` : undefined"><a-button :disabled="live ? !current.can?.transfer : locked">转派</a-button></a-tooltip>

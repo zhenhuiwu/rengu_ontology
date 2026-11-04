@@ -45,6 +45,7 @@ def security_now() -> datetime:
 
 
 METADATA_ROUTES = {
+    "/ontology/lineage": "ontology-overview",
     "/object-types": "object-types",
     "/object-types/brief": "data-quality",
     "/object-types/{id}": "object-types",

@@ -54,7 +54,8 @@ async def object_row_access(
             .order_by(SysRole.code)
         )
     )
-    access = await role_row_access(session, roles)
+    scopes = await _role_scopes(session, roles, ontology_id)
+    access = await role_row_access(session, roles, scopes=scopes)
     if member.role == "owner":
         from app.common.sql_guard import ensure_governed_tables, governed_tables
         from app.modules.static.models import ObjectStatus, ObjectType
@@ -78,9 +79,7 @@ async def object_row_access(
                     and isinstance(binding.read_columns, list) and binding.read_columns):
                 bound.add(obj.code)
         if bound:
-            scopes = list(await session.scalars(select(SysRoleScope).where(
-                SysRoleScope.ontology_id == ontology_id, SysRoleScope.role_id.in_([role.id for role in roles]),
-            ))) if roles else []
+            all_scopes = [scope for items in scopes.values() for scope in items]
             objects = await session.execute(select(ObjectType.id, ObjectType.code, ObjectType.api_name, ObjectType.display_name).where(
                 ObjectType.ontology_id == ontology_id, ObjectType.code.in_(bound),
                 ObjectType.created_by == user_code, ObjectType.status == ObjectStatus.published,
@@ -90,29 +89,17 @@ async def object_row_access(
                     isinstance(entry, dict) and entry.get("api") == api for entry in role.objs
                 ) for role in roles) or any(
                     scope.object_type_id == object_id or scope.object_type_code == code
-                    or scope.obj_type in (code, api, name) for scope in scopes
+                    or scope.obj_type in (code, api, name) for scope in all_scopes
                 )
                 if not explicit:
                     access[code] = None
     return access
 
 
-async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict | None]:
-    """Row filters for already ontology-bound roles (rows with id / objs / default_deny).
-
-    Shared by user identities and service accounts. Scopes are read for the current ontology only
-    (explicit predicate + FORCE RLS). A scope with object_type_id matches exactly that object type;
-    a scope whose referenced object type was deleted (code kept, id nulled) is unmapped and denies;
-    legacy rows without either keep the label matching, where ambiguity is also deny.
-    """
-    from app.common.sql_guard import RoleAccess, effective_expr, ensure_governed_tables, governed_tables
-    from app.modules.admin.org_scope import ORG_PROP, load_org_fields
-    from app.modules.static.models import ObjectStatus, ObjectType
-
-    ontology_id = session.info.get("ontology_id")
-    if ontology_id is None or not roles:
-        return {}
+async def _role_scopes(session, roles, ontology_id):
     scopes = {role.id: [] for role in roles}
+    if not scopes:
+        return scopes
     for scope in await session.execute(
         select(
             SysRoleScope.role_id,
@@ -127,6 +114,26 @@ async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict 
         .order_by(SysRoleScope.role_id, SysRoleScope.seq, SysRoleScope.id)
     ):
         scopes[scope.role_id].append(scope)
+    return scopes
+
+
+async def role_row_access(session: AsyncSession, roles: list, *, scopes=None) -> dict[str, dict | None]:
+    """Row filters for already ontology-bound roles (rows with id / objs / default_deny).
+
+    Shared by user identities and service accounts. Scopes are read for the current ontology only
+    (explicit predicate + FORCE RLS). A scope with object_type_id matches exactly that object type;
+    a scope whose referenced object type was deleted (code kept, id nulled) is unmapped and denies;
+    legacy rows without either keep the label matching, where ambiguity is also deny.
+    """
+    from app.common.sql_guard import RoleAccess, effective_expr, ensure_governed_tables, governed_tables
+    from app.modules.admin.org_scope import ORG_PROP, load_org_fields
+    from app.modules.static.models import ObjectStatus, ObjectType
+
+    ontology_id = session.info.get("ontology_id")
+    if ontology_id is None or not roles:
+        return {}
+    if scopes is None:
+        scopes = await _role_scopes(session, roles, ontology_id)
     governed = {}
     if any(scopes.values()):
         await ensure_governed_tables(session)
@@ -145,31 +152,40 @@ async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict 
     )
     identities = {obj.api_name: {obj.code, obj.api_name, obj.display_name} for obj in objects}
     published_ids = {obj.id for obj in objects}
+    role_indexes = {}
+    for role in roles:
+        permissions = [p for p in role.objs if isinstance(p, dict)] if isinstance(role.objs, list) else []
+        by_api, by_label = {}, {}
+        for entry in permissions:
+            api = entry.get("api")
+            if isinstance(api, str):
+                by_api.setdefault(api, []).append(entry)
+            if not isinstance(api, str) or api not in identities:
+                continue
+            labels = set(identities[api])
+            if isinstance(entry.get("objType"), str):
+                labels.add(entry["objType"])
+            for label in labels:
+                by_label.setdefault(label, set()).add(api)
+        unmapped = any(
+            scope.object_type_id not in published_ids
+            if scope.object_type_id is not None
+            else scope.object_type_code is not None or len(by_label.get(scope.obj_type, ())) != 1
+            for scope in scopes[role.id]
+        )
+        by_id, by_name = {}, {}
+        for position, scope in enumerate(scopes[role.id]):
+            if scope.object_type_id is not None:
+                by_id.setdefault(scope.object_type_id, []).append((position, scope))
+            elif scope.object_type_code is None:
+                by_name.setdefault(scope.obj_type, []).append((position, scope))
+        role_indexes[role.id] = by_api, by_label, unmapped, by_id, by_name
     output = {}
     for obj in objects:
         access = []
         for role in roles:
-            permissions = [p for p in role.objs if isinstance(p, dict)] if isinstance(role.objs, list) else []
-            by_label = {}
-            for entry in permissions:
-                api = entry.get("api")
-                if not isinstance(api, str) or api not in identities:
-                    continue
-                labels = set(identities[api])
-                if isinstance(entry.get("objType"), str):
-                    labels.add(entry["objType"])
-                for label in labels:
-                    by_label.setdefault(label, set()).add(api)
-
-            def unmapped_scope(scope, by_label=by_label) -> bool:
-                if scope.object_type_id is not None:
-                    return scope.object_type_id not in published_ids
-                if scope.object_type_code is not None:
-                    return True
-                return len(by_label.get(scope.obj_type, ())) != 1
-
-            unmapped = any(unmapped_scope(scope) for scope in scopes[role.id])
-            matches = [p for p in permissions if p.get("api") == obj.api_name]
+            by_api, by_label, unmapped, by_id, by_name = role_indexes[role.id]
+            matches = by_api.get(obj.api_name, [])
             if len(matches) != 1 or matches[0].get("view") is not True:
                 continue
             permission = matches[0]
@@ -177,7 +193,10 @@ async def role_row_access(session: AsyncSession, roles: list) -> dict[str, dict 
             if isinstance(permission.get("objType"), str):
                 names.add(permission["objType"])
             scoped = []
-            for scope in scopes[role.id]:
+            candidates = dict(by_id.get(obj.id, []))
+            for name in names:
+                candidates.update(by_name.get(name, []))
+            for _, scope in sorted(candidates.items()):
                 if scope.object_type_id is not None or scope.object_type_code is not None:
                     if scope.object_type_id != obj.id:
                         continue

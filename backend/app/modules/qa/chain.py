@@ -45,7 +45,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
-from sqlalchemy.schema import CreateColumn, SetColumnComment, SetTableComment
+from sqlalchemy.schema import CreateColumn
 from sqlglot import exp
 
 from app.common.ontology import require_ontology_id
@@ -58,8 +58,10 @@ from app.db.session import QaReadonlyNotConfigured, SessionDep, get_qa_readonly_
 from app.modules.ontology.models import OntologyWorkspace
 from app.modules.qa import guards, sqlfix
 from app.modules.qa import value_index as vi
-from app.modules.qa.llm import LLMClient
+from app.modules.qa.generation_budget import GenerationBudget
+from app.modules.qa.llm import LLMClient, observe_answer, timed_generate_sql, timing_stage
 from app.modules.qa.models import QaSynonymLink
+from app.modules.qa.read_cache import cached_read, read_scope
 from app.modules.qa.readonly import scope_readonly_conn
 from app.modules.static.models import (
     Dimension,
@@ -183,8 +185,19 @@ def qa_source(ontology_id: int, session=None) -> QaSource:
             elif isinstance(c.type, sa.Numeric | sa.Integer) and not c.primary_key and not c.foreign_keys:
                 if (head := _comment_head(c)) and len(head) >= 2:
                     measures.append(re.sub(r"[^\w]+$", "", head))
-        if "name" in t.columns and isinstance(t.columns["name"].type, sa.String) and not any(child.name == t.name for _, child in (session.info if session else {}).get("supplementary_bindings", {}).values()):
-            names[t.name] = "name"
+        title = ((session.info.get("title_columns") if session is not None else None) or {}).get(
+            bindings[t.name].object_type
+        )
+        name_col = next(
+            (
+                key
+                for key in ("name", title)
+                if key and key in t.columns and isinstance(t.columns[key].type, sa.String)
+            ),
+            None,
+        )
+        if name_col and not any(child.name == t.name for _, child in (session.info if session else {}).get("supplementary_bindings", {}).values()):
+            names[t.name] = name_col
     return QaSource(
         tables=tables,
         time_cols=frozenset(time_cols),
@@ -199,7 +212,7 @@ def _qa_tables(ontology_id: int, session=None) -> tuple[Any, ...]:
 
 
 def _schema_lines(ontology_id: int, session=None) -> list[str]:
-    """Vanna 式 DDL 上下文：用 SQLAlchemy 把 ORM 表编译成 PG 的 CREATE TABLE + COMMENT ON。
+    """Complete DDL with one-line JSON comments, avoiding repeated table/column identities.
 
     系统列不进 DDL；枚举列（库里存英文 code）在注释里给出 code=中文标签。
     """
@@ -209,18 +222,20 @@ def _schema_lines(ontology_id: int, session=None) -> list[str]:
     for t in _qa_tables(ontology_id, session):
         columns = [c for c in t.columns if _qa_column_visible(bindings[t.name], c)]
         name = dialect.identifier_preparer.format_table(t)
-        ddl = [f"CREATE TABLE {name} (\n  " + ",\n  ".join(str(CreateColumn(c).compile(dialect=dialect)) for c in columns) + "\n);"]
-        if t.comment:
-            ddl.append(str(SetTableComment(t).compile(dialect=dialect)) + ";")
-        for c in t.columns:
-            if not _qa_column_visible(bindings[t.name], c):
-                continue
+        lines = []
+        for index, c in enumerate(columns):
+            line = str(CreateColumn(c).compile(dialect=dialect)) + ("," if index < len(columns) - 1 else "")
             if enum := _label_enum(c):
                 codes = "，".join(f"{m.name}={m.value}" for m in enum)
-                ddl.append(f"COMMENT ON COLUMN {t.name}.{c.name} IS '{c.comment or '取值'}：{codes}';")
-            elif c.comment:
-                ddl.append(str(SetColumnComment(c).compile(dialect=dialect)) + ";")
-        out.append("\n".join(ddl))
+                comment = f"{c.comment or '取值'}：{codes}"
+            else:
+                comment = c.comment
+            if comment:
+                # JSON escapes newlines; the comma remains outside the SQL line comment.
+                line += " -- " + json.dumps(comment, ensure_ascii=False)
+            lines.append("  " + line)
+        description = "-- " + json.dumps(t.comment, ensure_ascii=False) + "\n" if t.comment else ""
+        out.append(description + f"CREATE TABLE {name} (\n" + "\n".join(lines) + "\n);")
     return out
 
 
@@ -276,6 +291,12 @@ def _mirror_sql(session: AsyncSession, table_name: str) -> str | None:
 
 async def _distinct_values(session: AsyncSession, table, column, limit: int | None) -> list[Any]:
     """物理表直接查；外部镜像没有 public.<表>，改查同步结果。"""
+    binding = governed_tables(require_ontology_id(session), session).get(table.name)
+    key = ("distinct", id(session), require_ontology_id(session), id(binding), id(table), column.name, limit)
+    return await cached_read(key, lambda: _read_distinct_values(session, table, column, limit))
+
+
+async def _read_distinct_values(session: AsyncSession, table, column, limit: int | None) -> list[Any]:
     source = _mirror_sql(session, table.name)
     if source:
         ident = _sql_ident(column.name)
@@ -294,6 +315,12 @@ async def _distinct_values(session: AsyncSession, table, column, limit: int | No
 
 
 async def _table_count(session: AsyncSession, table) -> int:
+    binding = governed_tables(require_ontology_id(session), session).get(table.name)
+    key = ("count", id(session), require_ontology_id(session), id(binding), id(table))
+    return await cached_read(key, lambda: _read_table_count(session, table))
+
+
+async def _read_table_count(session: AsyncSession, table) -> int:
     source = _mirror_sql(session, table.name)
     if source:
         gov = governed_tables(require_ontology_id(session), session)[table.name]
@@ -820,6 +847,12 @@ async def build_context(session: AsyncSession) -> dict[str, list[str]]:
     await ensure_governed_tables(session)
     src = qa_source(ontology_id, session)
     if not src.tables:
+        # A concurrent binding-version bump can leave this request's cache stale;
+        # reload once before declaring the workspace unconfigured.
+        from app.common.sql_guard import load_governed_tables
+        await load_governed_tables(session, ontology_id)
+        src = qa_source(ontology_id, session)
+    if not src.tables:
         if session.info.get("mirror_gaps"):
             raise DataNotConfigured("外部数据源已接入，但还没有可查询的同步结果。请在数据连接中完成只读授权并同步后再提问")
         raise DataNotConfigured()
@@ -1175,7 +1208,7 @@ def build_prompt(question: str, ctx: dict[str, list[str]]) -> list[dict[str, str
     if ctx.get("definition_evidence"):
         prompt += (
             '\n用户询问已配置的本体定义、动作提交条件、业务知识或系统能力时，优先从“本体定义”中选择相关条目，'
-            '只输出 JSON：{"definition": {"ids": ["条目id"]}}。只能选择提供的 id，最多 5 个；'
+            '每条定义为 [id, 内容]；只输出 JSON：{"definition": {"ids": ["条目id"]}}。只能选择第一项提供的 id，最多 5 个；'
             '系统会原样展示定义和来源，不能添加或推断未配置的条件。若条目不能回答问题，'
             '明确说明没有对应定义，用 NO_DATA 拒答，不得声称无权限。询问业务数据时仍按原规则查询。\n'
         )
@@ -1395,6 +1428,8 @@ def precheck_clarify(
     )
 
 
+@observe_answer
+@read_scope
 async def answer(
     session: AsyncSession,
     conn: AsyncConnection,
@@ -1422,6 +1457,7 @@ async def answer(
     from app.modules.qa import definition_answers
 
     def stage(name: str, text: str) -> None:
+        timing_stage(name)
         if on_status is not None:
             on_status(name, text)
 
@@ -1542,8 +1578,9 @@ async def answer(
     if published_range:
         ctx["metric_default_range"] = [
             published_range.note,
-            f"时间字段 {published_range.table}.{published_range.column}，"
-            f"下界 {published_range.lower}，上界 {published_range.upper}（不含）。",
+            ("固定版本组合指标，必须使用 metric 查询入口；时间字段由各引用指标确定。"
+             if published_range.program else f"时间字段 {published_range.table}.{published_range.column}，")
+            + f"下界 {published_range.lower}，上界 {published_range.upper}（不含）。",
         ]
     ctx["values"] = vi.prompt_lines(vres)
     ctx["hierarchy"] = vi.hierarchy_lines(
@@ -1581,10 +1618,13 @@ async def answer(
     ctx["session_scope"] = [session_scope] if session_scope else []
     ctx["session_caliber"] = caliber_lines or []  # 会话口径 → 指标变体（service.caliber_lines）
     definitions = await definition_answers.evidence(session, user, request)
-    ctx["definition_evidence"] = definition_answers.prompt_lines(definitions)
+    prompt_definitions = definition_answers.select_evidence(question, definitions)
+    compact_definitions = len(prompt_definitions) < len(definitions)
+    ctx["definition_evidence"] = definition_answers.prompt_lines(prompt_definitions)
     # 图表由前端按结果绘制，不让模型把展示方式误认为查询条件。
     query_question = re.sub(r"(?:用|以|通过)?(?:柱状图|柱形图|条形图|折线图)(?:展示|显示|呈现)?", "", question).strip(" ，,。") or question
     messages = build_prompt(query_question, ctx)
+    generation_budget = GenerationBudget()
     limit = ROW_LIMIT
     attempt, checked, repaired, overruled = 0, False, False, False
     fix_notes: list[str] = []
@@ -1593,12 +1633,25 @@ async def answer(
     while True:
         default_applied = False
         stage("compiling", "正在生成查询")
-        reply = await llm.generate_sql(messages)
+        reply = await generation_budget.run(timed_generate_sql, llm, messages)
         intent, val = parse_intent(reply)
+        definition_snap = (
+            definition_answers.snapshot(val.get("ids"), prompt_definitions)
+            if intent == "definition" else None
+        )
+        # Keep valid source-backed definitions in one call; uncertainty gets the full evidence once.
+        if compact_definitions and (
+            intent in ("clarify", "refuse") or (intent == "definition" and definition_snap is None)
+        ):
+            compact_definitions = False
+            stage("linking", "正在核对本体定义")
+            ctx["definition_evidence"] = definition_answers.prompt_lines(definitions)
+            prompt_definitions = definitions
+            messages = build_prompt(query_question, ctx)
+            continue
         if intent == "definition":
-            snap = definition_answers.snapshot(val.get("ids"), definitions)
-            if snap is not None:
-                return done("answer", snap)
+            if definition_snap is not None:
+                return done("answer", definition_snap)
             return done("denied", refuse_snapshot({"code": "NO_DATA", "reason": "没有找到可用的本体定义"}))
         if intent == "action":  # 动作意图：只 dry-run 出建议确认卡，从不执行
             proposal = act.parse_action(val, catalog)
@@ -1656,7 +1709,26 @@ async def answer(
                     if isinstance(metric_request.get("time"), dict):
                         metric_request["time"] = {k: v for k, v in metric_request["time"].items() if k not in ("start", "end")}
                     val = {**val, "metric": metric_request}
+                if published_range and published_range.program and not any((val.get("metric", {}).get("time") or {}).get(k)
+                                               for k in ("start", "end")):
+                    val = {**val, "metric": {**val["metric"], "time": {
+                        **(val["metric"].get("time") or {}), "start": str(published_range.lower),
+                        "end": str(published_range.upper)}}}
+                program = await sem.execute_program(session, user, val, manifest, clock.local_now(), limit + 1)
+                if program is not None:
+                    mplan, result = program
+                    sql, keys = None, result["columns"]
+                    rows = [[_cell(v) for v in row] for row in result["rows"]]
+                    data_sources = result.get("dataSources") or []
+                    default_applied = bool(published_range)
+                    break
                 mplan = sem.plan(val, manifest, clock.local_now())
+                from app.modules.governance.policy import enforce
+                from app.modules.static.lineage import identity
+                selected_metrics = {m["name"]: m.get("config", {}).get("meta", {}).get("rengu", {}).get("id")
+                                    for m in manifest.get("metrics", [])}
+                await enforce(session, user, [identity("metric", selected_metrics[m]) for m in mplan.metrics
+                                              if selected_metrics.get(m)], "aggregate", unmasked=True)
                 sql = sem.compile_plan(manifest, mplan)
                 tree = assert_single_select(sql)
                 if published_range:
@@ -1883,7 +1955,7 @@ async def answer(
         "card": "table",  # [推断] 本期只出表格卡
         "dataAsOf": s.data_cutoff,
         "basis": {
-            "caliber": sem.CALIBER if mplan is not None else "LLM 生成 SQL [推断]，未走 SemPlan 校验",
+            "caliber": mplan.caliber if mplan is not None else "LLM 生成 SQL [推断]，未走 SemPlan 校验",
             "perm": "已按行级权限过滤",
         },
         "text": text,

@@ -34,6 +34,7 @@ class PublishedRange:
     predicates: tuple[str, ...]
     timezone: str
     direct_source: bool = False
+    program: bool = False
 
     @property
     def note(self):
@@ -43,6 +44,9 @@ class PublishedRange:
         )
 
     def apply(self, tree):
+        if self.program:
+            raise AppError("组合指标必须通过确定性指标入口查询，不能改写为模型生成的SQL",
+                           code="METRIC_DEFAULT_UNAVAILABLE", status_code=422)
         # Remove model-invented windows, then enforce this window and the saved metric predicates.
         sqlfix.strip_time_window(tree, frozenset({self.column}))
         count = 0
@@ -147,6 +151,17 @@ async def resolve_default(session, user, question, *, ver=None):
         return None, None
     try:
         configured = default_range(value)
+        from app.modules.static.metric_program import is_program
+        from app.modules.static.metric_trial import parse_formula, program_details
+        if is_program(parse_formula(metric.formula)):
+            info = await program_details(session, user, {"id": metric.code, "formula": metric.formula,
+                                                       "def": metric.def_rows})
+            if not info["hasTimeField"]:
+                raise AppError("快照组合指标不能配置默认时间范围", code="METRIC_DEFAULT_UNAVAILABLE", status_code=422)
+            start, end, lo, hi = metric_window(configured["days"])
+            return PublishedRange(metric.code, metric.display_name, metric.version, "", "", configured["days"],
+                                  str(start), str(end), lo.isoformat(), hi.isoformat(), (), str(lo.tzinfo),
+                                  program=True), None
         objects = list(await session.scalars(select(ObjectType)))
         definition = {"formula": metric.formula, "def": metric.def_rows}
         from app.common.sql_guard import ensure_governed_tables

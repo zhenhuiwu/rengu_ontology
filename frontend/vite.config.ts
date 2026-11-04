@@ -9,7 +9,9 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [vue()],
     resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
-    server: { host: '0.0.0.0', port: 5280, strictPort: true, proxy: { '/api': { target: apiTarget, changeOrigin: true } } },
+    // Preserve the browser Host/Origin through the proxy: the backend CSRF guard
+    // compares Origin with its own base URL, so rewriting Host to 127.0.0.1 breaks LAN IP access.
+    server: { host: '0.0.0.0', port: 5280, strictPort: true, proxy: { '/api': { target: apiTarget, changeOrigin: false } } },
     preview: { host: '0.0.0.0', port: 5281, strictPort: true },
     optimizeDeps: {
       include: ['ant-design-vue', '@ant-design/icons-vue', 'echarts', 'vue-echarts', '@antv/x6', 'dayjs', 'pinia', 'vue-router'],

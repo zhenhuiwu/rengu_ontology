@@ -11,6 +11,11 @@
 
 from __future__ import annotations
 
+import logging
+import time
+from contextvars import ContextVar
+from dataclasses import dataclass
+from functools import wraps
 from typing import Annotated, Protocol
 
 from fastapi import Depends
@@ -19,6 +24,101 @@ from openai import APIConnectionError, APIError, APIStatusError, AsyncOpenAI, om
 from app.core.errors import AppError
 from app.db.session import SessionDep
 from app.modules.admin.model_settings import ModelRuntime, environment_model, load_model_runtime
+
+_timing_log = logging.getLogger("app.qa.timing")
+
+
+@dataclass
+class _QaTiming:
+    ontology_id: int
+    started: float
+    stage_started: float
+    stage: str = "starting"
+    model_count: int = 0
+    model_ms: float = 0
+    prepare_ms: float | None = None
+
+
+_timing: ContextVar[_QaTiming | None] = ContextVar("qa_timing", default=None)
+
+
+def timing_stage(name: str) -> None:
+    """Only fixed stage names and durations; never log question/prompt/SQL content."""
+    if (timing := _timing.get()) is not None:
+        now = time.monotonic()
+        _timing_log.info(
+            "qa_stage ontologyId=%s stage=%s elapsedMs=%.1f",
+            timing.ontology_id,
+            timing.stage,
+            (now - timing.stage_started) * 1000,
+        )
+        timing.stage, timing.stage_started = name, now
+
+
+def observe_answer(func):
+    """Request-local timing, including early returns, failures and cancellation."""
+
+    @wraps(func)
+    async def wrapped(session, *args, **kwargs):
+        oid = session.info.get("ontology_id")
+        started = time.monotonic()
+        timing = _QaTiming(oid if type(oid) is int else 0, started, started)
+        token = _timing.set(timing)
+        outcome = "ok"
+        try:
+            return await func(session, *args, **kwargs)
+        except BaseException as error:
+            outcome = type(error).__name__
+            raise
+        finally:
+            try:
+                timing_stage("finished")
+                total_ms = (time.monotonic() - timing.started) * 1000
+                _timing_log.info(
+                    "qa_total ontologyId=%s outcome=%s totalMs=%.1f modelCount=%s "
+                    "modelMs=%.1f prepareMs=%.1f",
+                    timing.ontology_id,
+                    outcome,
+                    total_ms,
+                    timing.model_count,
+                    timing.model_ms,
+                    timing.prepare_ms if timing.prepare_ms is not None else total_ms,
+                )
+            finally:
+                _timing.reset(token)
+
+    return wrapped
+
+
+async def timed_generate_sql(llm, messages: list[dict[str, str]]) -> str:
+    """One logical model call; duration includes the client's existing transport retries."""
+    timing = _timing.get()
+    if timing is None:
+        return await llm.generate_sql(messages)
+    started = time.monotonic()
+    if timing.prepare_ms is None:
+        timing.prepare_ms = (started - timing.started) * 1000
+    timing.model_count += 1
+    response_chars, outcome = 0, "ok"
+    try:
+        reply = await llm.generate_sql(messages)
+        response_chars = len(reply)
+        return reply
+    except BaseException as error:
+        outcome = type(error).__name__
+        raise
+    finally:
+        duration_ms = (time.monotonic() - started) * 1000
+        timing.model_ms += duration_ms
+        _timing_log.info(
+            "qa_model ontologyId=%s attempt=%s durationMs=%.1f promptChars=%s responseChars=%s outcome=%s",
+            timing.ontology_id,
+            timing.model_count,
+            duration_ms,
+            sum(len(message.get("content", "")) for message in messages),
+            response_chars,
+            outcome,
+        )
 
 
 class QaLlmUnavailable(AppError):

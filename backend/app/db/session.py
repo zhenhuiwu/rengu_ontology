@@ -30,7 +30,8 @@ def get_engine() -> AsyncEngine:
         _engine = create_async_engine(
             s.database_url, echo=s.db_echo, pool_size=s.db_pool_size, pool_pre_ping=True
         )
-        _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
+        from app.modules.governance.query_guard import PolicySession
+        _sessionmaker = async_sessionmaker(_engine, class_=PolicySession, expire_on_commit=False)
     return _engine
 
 
@@ -82,12 +83,18 @@ async def dispose_engine() -> None:
 
 async def get_session() -> AsyncIterator[AsyncSession]:
     async with get_sessionmaker()() as session:
+        from app.modules.governance.query_guard import request_session
+        context = {"session": session, "active": True}
+        token = request_session.set(context)
         try:
             yield session
             await session.commit()
         except Exception:
             await session.rollback()
             raise
+        finally:
+            context["active"] = False
+            request_session.reset(token)
 
 
 SessionDep = Annotated[AsyncSession, Depends(get_session, scope="function")]

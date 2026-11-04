@@ -105,6 +105,8 @@ class ExtSystemIn(ApiModel):
     @field_validator("endpoint")
     @classmethod
     def _endpoint(cls, v: str) -> str:
+        if re.fullmatch(r"database://[A-Za-z_][A-Za-z0-9_-]{0,63}", v):
+            return v
         try:
             parts = urlsplit(v)
             port = parts.port
@@ -123,6 +125,10 @@ class ExtSystemIn(ApiModel):
 
     @model_validator(mode="after")
     def _idem(self) -> Self:
+        if self.endpoint.startswith('database://'):
+            self.category = '数据库写回'
+        elif self.category == '数据库写回':
+            raise PydanticCustomError('value_error', '数据库写回的地址须为 database://当前本体数据连接编号')
         if self.idempotent and not self.idem_key:
             raise PydanticCustomError("value_error", "支持幂等时需填写幂等键")
         return self

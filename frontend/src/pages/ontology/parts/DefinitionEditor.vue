@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** Approved definition forms. All writes are CR sections; no runtime metrics or arbitrary SQL. */
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
@@ -46,6 +46,52 @@ const propTypeOptions = [
 const visibilityOptions = [{ value: 'prominent', label: '突出' }, { value: 'normal', label: '普通' }, { value: 'hidden', label: '隐藏' }];
 const properties = ref<DefinitionProperty[]>([]), sourceProperties = ref<DefinitionProperty[]>([]);
 const choices = reactive<{ owners: DefinitionOption[]; objects: DefinitionOption[]; metrics: DefinitionOption[]; dimensions: DefinitionOption[]; metricGroups: string[] }>({ owners: [], objects: [], metrics: [], dimensions: [], metricGroups: [] });
+const metricReference = ref(''), metricOperation = ref('');
+const metricAmount = ref<number | null>(1), metricPrecision = ref<number | null>(2);
+const formulaElement = ref<HTMLTextAreaElement>(), formulaSelection = ref<{ start: number; end: number }>();
+const windowOperations = ['PREV', 'MOVING_AVG', 'MOVING_SUM', 'DELTA', 'PCT_CHANGE'];
+const metricOperations = [
+  ['', '仅引用指标'], ['PREV', '前期值'], ['MOVING_AVG', '移动平均'], ['MOVING_SUM', '移动合计'],
+  ['WOW', '周环比'], ['DELTA', '差值'], ['PCT_CHANGE', '变化率'], ['RUNNING_SUM', '累计合计'],
+  ['ABS', '绝对值'], ['ROUND', '四舍五入'], ['COALESCE', '缺失补0'],
+].map(([value, label]) => ({ value, label: value ? `${label} ${value}` : label }));
+const referenceCandidates = computed(() => choices.metrics.filter(m => m.status === '已发布' && m.api && m.version
+  && !['current', '草稿'].includes(m.version) && m.id !== props.targetId && m.api !== values.api));
+const referencedMetric = computed(() => referenceCandidates.value.find(m => m.id === metricReference.value));
+const referenceVersions = computed(() => referencedMetric.value?.version ? [{ value: referencedMetric.value.version, label: referencedMetric.value.version }] : []);
+function buildMetricExpression(metric: DefinitionOption | undefined, operation: string, amount?: number | null): string {
+  if (!metric?.api || !metric.version || metric.status !== '已发布' || ['current', '草稿'].includes(metric.version)) return '';
+  const quoted = (value: string) => `'${value.replace(/'/g, "''")}'`;
+  const reference = `METRIC(${quoted(metric.api)},${quoted(metric.version)})`;
+  if (!operation) return reference;
+  if (['PREV', 'MOVING_AVG', 'MOVING_SUM', 'DELTA', 'PCT_CHANGE', 'ROUND'].includes(operation)) {
+    const low = operation === 'ROUND' ? 0 : 1, high = operation === 'ROUND' ? 10 : 93;
+    if (!Number.isInteger(amount) || Number(amount) < low || Number(amount) > high) return '';
+    return `${operation}(${reference},${amount})`;
+  }
+  if (operation === 'COALESCE') return `COALESCE(${reference},0)`;
+  return ['WOW', 'RUNNING_SUM', 'ABS'].includes(operation) ? `${operation}(${reference})` : '';
+}
+const metricExpression = computed(() => buildMetricExpression(referencedMetric.value, metricOperation.value,
+  metricOperation.value === 'ROUND' ? metricPrecision.value : metricAmount.value));
+function captureFormulaSelection(event: Event) {
+  if (!(event.target instanceof HTMLTextAreaElement)) return;
+  formulaElement.value = event.target;
+  formulaSelection.value = { start: event.target.selectionStart, end: event.target.selectionEnd };
+}
+async function insertMetricReference() {
+  if (readonly.value || loading.value || busy.value || error.value || !metricExpression.value || !visible.value) return;
+  const text = String(values.formula ?? ''), expression = metricExpression.value;
+  const start = Math.min(formulaSelection.value?.start ?? text.length, text.length);
+  const end = Math.min(formulaSelection.value?.end ?? start, text.length);
+  values.formula = text.slice(0, start) + expression + text.slice(end);
+  const cursor = start + expression.length;
+  formulaSelection.value = { start: cursor, end: cursor };
+  await nextTick();
+  if (visible.value && props.kind === 'metric' && formulaElement.value?.isConnected) {
+    formulaElement.value.focus(); formulaElement.value.setSelectionRange(cursor, cursor);
+  }
+}
 interface Level { name: string; api: string; source: string; note?: string }
 interface Variant { code: string; label: string; default: boolean; api?: string; version?: string }
 const previousLevels = ref<Level[]>([]);
@@ -64,6 +110,8 @@ async function load() {
   if (!visible.value) return;
   if (!isStaticReal()) { error.value = '定义表单仅用于真实接口模式'; loading.value = false; return; }
   loading.value = true; error.value = ''; assistantSourceHint.value = ''; lockVersion.value = undefined; choices.metricGroups = []; sourceProperties.value = []; initialSnapshot.value = '';
+  metricReference.value = ''; metricOperation.value = ''; metricAmount.value = 1; metricPrecision.value = 2;
+  formulaSelection.value = undefined; formulaElement.value = undefined;
   sources.value = []; catalogTables.value = []; sourcesError.value = ''; catalogError.value = ''; catalogSeq++;
   const defaults: DefinitionValues = { name: '', api: props.targetId ?? '', group: '', owner: '', domain: '', desc: '', conflict: '用户编辑优先', source: '', table: '', pk: '', sync: '', unit: '', version: 'v1', formula: '', timeField: '', defaultFilter: '', defaultRange: null, dims: [], kind: '维度', object: '', attr: '', column: '', valueSrc: '', levels: [], variants: [] };
   Object.keys(values).forEach((k) => delete values[k]); Object.assign(values, defaults);
@@ -360,7 +408,24 @@ async function save() {
         </template>
         <template v-else-if="kind === 'metric'">
           <div class="definition-grid"><a-form-item label="单位"><a-input v-model:value="values.unit" :maxlength="16" /></a-form-item><a-form-item label="口径版本"><a-input v-model:value="values.version" :maxlength="16" /></a-form-item></div>
-          <a-form-item label="公式（口径定义）"><a-textarea v-model:value="values.formula" :rows="3" placeholder="填写指标计算公式" /></a-form-item>
+          <a-form-item label="公式（口径定义）">
+            <div class="metric-inserter">
+              <div class="metric-inserter-controls">
+                <a-select v-model:value="metricReference" aria-label="引用已发布指标" show-search option-filter-prop="label" allow-clear placeholder="引用已发布指标" :options="referenceCandidates.map(m => ({ value: m.id, label: `${m.name}（${m.api}）` }))" />
+                <a-select :value="referencedMetric?.version" aria-label="固定指标版本" :options="referenceVersions" :disabled="!referencedMetric" placeholder="固定版本" />
+                <a-select v-model:value="metricOperation" aria-label="指标引用运算" :options="metricOperations" />
+                <a-button :disabled="!metricExpression || readonly || loading || busy || !!error" @click="insertMetricReference">插入</a-button>
+              </div>
+              <div v-if="windowOperations.includes(metricOperation) || metricOperation === 'ROUND'" class="metric-inserter-parameter">
+                <label v-if="metricOperation === 'ROUND'">小数位数<a-input-number v-model:value="metricPrecision" aria-label="小数位数" :min="0" :max="10" :precision="0" /></label>
+                <label v-else>窗口期数<a-input-number v-model:value="metricAmount" aria-label="窗口期数" :min="1" :max="93" :precision="0" /></label>
+                <span v-if="metricOperation !== 'ROUND'" class="t-12 c-3">按试算选择的时间粒度计算，需要时间序列。</span>
+              </div>
+              <code v-if="metricExpression" class="metric-inserter-preview num">{{ metricExpression }}</code>
+            </div>
+            <a-textarea v-model:value="values.formula" :rows="3" placeholder="填写指标计算公式" @focus="captureFormulaSelection" @click="captureFormulaSelection" @keyup="captureFormulaSelection" @select="captureFormulaSelection" @input="captureFormulaSelection" />
+            <span class="t-12 c-3">在公式光标处插入，可先选中待替换内容。引用绑定所示已发布版本。</span>
+          </a-form-item>
           <div class="definition-grid"><a-form-item label="时间字段" extra="时间范围使用此字段；格式 对象API.属性API"><a-input v-model:value="values.timeField" :maxlength="256" placeholder="对象API.属性API" allow-clear /></a-form-item><a-form-item label="默认过滤" extra="问题里没写时自动加上；多个条件用；分隔"><a-input v-model:value="values.defaultFilter" :maxlength="256" placeholder="对象API.属性API = 值" allow-clear /></a-form-item></div>
           <div class="definition-grid"><a-form-item label="缺少时间时" extra="发布后，提问未指定时间时使用；未设置则追问"><a-select v-model:value="defaultRangeMode" :options="[{ value: 'none', label: '未设置' }, { value: 'rolling_days', label: '最近若干天（含今天）' }]" /></a-form-item><a-form-item v-if="defaultRangeMode === 'rolling_days'" label="天数" required><a-input-number v-model:value="defaultRangeDays" :min="1" :max="93" :precision="0" placeholder="填写天数" /></a-form-item></div>
           <a-form-item label="允许维度"><a-select v-model:value="values.dims" mode="multiple" :options="dimensionOptions" /></a-form-item>
@@ -404,4 +469,10 @@ async function save() {
 .definition-variant { display: grid; grid-template-columns: 240px 180px 1fr auto auto; gap: 8px; align-items: center; margin-bottom: 12px; }
 .definition-footer > span { flex: 1; }
 .definition-row .definition-grid { row-gap: 12px; margin-bottom: 12px; }
+.metric-inserter { display: grid; gap: 8px; margin-bottom: 8px; padding: 12px; border: var(--border); border-radius: var(--radius); background: var(--g2); }
+.metric-inserter-controls { display: grid; grid-template-columns: minmax(180px, 1fr) 112px minmax(156px, .7fr) auto; gap: 8px; }
+.metric-inserter-controls > * { min-width: 0; }
+.metric-inserter-parameter, .metric-inserter-parameter label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.metric-inserter-preview { color: var(--c-2); overflow-wrap: anywhere; }
+@media (max-width: 760px) { .metric-inserter-controls { grid-template-columns: minmax(0, 1fr) 112px; } }
 </style>

@@ -566,6 +566,9 @@ class DatabaseSubmissionChecker:
         return result
 
     async def check(self, action_type_code: str, context: dict[str, Any]) -> list[dict[str, str]]:
+        from app.modules.governance.policy import enforce
+        from app.modules.static.lineage import identity
+        await enforce(self.session, self.user, [identity("action", action_type_code)], "execute")
         action = await definition(self.session, action_type_code, ViewContext(), "published", None)
         result = await self.run(action, context)
         self.human_checks = result.get("humanChecks", [])

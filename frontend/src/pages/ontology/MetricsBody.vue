@@ -127,8 +127,10 @@ const REFS = shallowRef([...METRIC_REFS]);
 if (isStaticReal()) {
   let detailSeq = 0;
   onBeforeUnmount(() => { ++detailSeq; });
-  watch(() => JSON.stringify([publishedCurrent.value?.id, staticContextKey(), route.query.view,
-    workflow.loading.value, draft.value?.id, cr.loading.value, cr.error.value, newTarget.value]), async () => {
+  const metricDetailKey = () => JSON.stringify([publishedCurrent.value?.id, staticContextKey(), route.query.view,
+    route.query.view === 'draft' || newTarget.value ? workflow.loading.value : false,
+    draft.value?.id, cr.loading.value, cr.error.value, newTarget.value]);
+  watch(metricDetailKey, async () => {
     const seq = ++detailSeq, key = staticContextKey(), id = publishedCurrent.value?.id;
     metricDetailError.value = '';
     DEF.value = []; DIMS.value = []; VERSIONS.value = []; REFS.value = []; rawDefinition.value = {};
@@ -253,23 +255,23 @@ const deletion = useDefinitionDelete('metric', {
   </Teleport>
 
   <div class="mt">
-    <div class="panel mt-list">
+    <div class="panel mt-list side-list">
       <div class="mt-filter">
         <a-input-search v-model:value="kw" placeholder="搜索名称或 API 名" />
-        <a-segmented v-model:value="group" :options="GROUPS" block size="small" />
+        <a-select v-model:value="group" :options="GROUPS.map((g) => ({ value: g, label: g === '全部' ? '全部分类' : g }))" class="mt-sel" />
       </div>
       <a-alert v-if="groupsError" type="error" :message="groupsError" show-icon><template #action><a-button size="small" @click="loadGroups">重试分类</a-button></template></a-alert>
       <a-alert v-if="deletion.error.value || metricPage.error.value || metricDetailError" type="error" :message="deletion.error.value || metricPage.error.value || metricDetailError" show-icon />
       <div v-if="metricPage.loading.value" style="text-align: center; padding: 8px"><a-spin size="small" /></div>
-      <ul class="mt-items" :aria-busy="metricPage.loading.value">
-        <li v-for="m in list" :key="m.id" :class="{ active: m.id === cur.id }" :title="`${m.name} · ${m.api} · ${m.group}`" @click="pick(m.id)">
-          <div class="mt-row">
-            <span class="t-14 mt-name mt-ell">{{ m.name }}</span>
-            <span class="t-12 num" :class="shownStatus(m) === '审核中' ? 'c-warning' : 'c-3'">{{ shownStatus(m) === '已发布' ? '' : shownStatus(m) + ' · ' }}{{ m.version }}</span>
+      <ul class="mt-items side-list-items" :aria-busy="metricPage.loading.value">
+        <li v-for="m in list" :key="m.id" class="side-list-item" :class="{ active: m.id === cur.id }" :title="`${m.name} · ${m.api} · ${m.group}`" @click="pick(m.id)">
+          <div class="mt-row side-list-row">
+            <span class="t-14 mt-name mt-ell side-list-name">{{ m.name }}</span>
+            <span class="t-12 num side-list-meta" :class="shownStatus(m) === '审核中' ? 'c-warning' : 'c-3'">{{ shownStatus(m) === '已发布' ? '' : shownStatus(m) + ' · ' }}{{ m.version }}</span>
           </div>
         </li>
       </ul>
-      <div class="mt-foot">
+      <div class="mt-foot side-list-foot">
         <AppPagination v-model:page="lpage" variant="simple" :total="listTotal" :size="LPAGE" class="mt-pager" empty-text="没有匹配的指标" />
       </div>
     </div>
@@ -353,16 +355,12 @@ const deletion = useDefinitionDelete('metric', {
 
 <style scoped>
 .mt { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.mt-list { width: 300px; flex: none; }
+.mt-list { flex: none; }
 .mt-filter { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 8px; flex: none; }
-.mt-items { list-style: none; margin: 0; padding: 0 8px; flex: 1; min-height: 0; }
-.mt-items li { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
-.mt-items li:hover { background: var(--g3); }
-.mt-items li.active { background: var(--brand-bg); }
-.mt-items li.active .mt-name { color: var(--brand); }
+.mt-sel { width: 100%; }
+.mt-items { flex: 1; min-height: 0; }
 .mt-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .mt-pager { flex: 1; min-height: 0; }
-.mt-foot { padding: 8px 12px 8px 16px; border-top: var(--border); flex: none; display: flex; align-items: center; justify-content: space-between; }
 .mt-detail { flex: 1; min-width: 0; }
 .mt-diff { margin-inline: 8px 0; font-weight: var(--fw-regular); }
 .mt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 52px; padding: 8px 16px; flex: none; }

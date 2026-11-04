@@ -213,18 +213,19 @@ class ActionTypeService:
         )
 
     async def stats(self, type_id: str, days: int = 30) -> dict[str, Any]:
+        from app.modules.governance.dynamic_guard import read_scope
         if await self.session.scalar(select(ActionType.id).where(ActionType.code == type_id)) is None:
             raise NotFound("动作类型不存在", details={"id": type_id})
         until = clock.now()
         groups = (
             await self.session.execute(
-                select(ActionRun.status, func.count(), func.sum(func.coalesce(ActionRun.elapsed_ms, 0)))
+                await read_scope(self.session, self.session.info.get("governance_user"), select(ActionRun.status, func.count(), func.sum(func.coalesce(ActionRun.elapsed_ms, 0)))
                 .where(
                     ActionRun.action_type_code == type_id,
                     ActionRun.submitted_at >= until - timedelta(days=days),
                     ActionRun.submitted_at <= until,
                 )
-                .group_by(ActionRun.status)
+                .group_by(ActionRun.status), ActionRun)
             )
         ).all()
         counts = {status: count for status, count, _ in groups}
@@ -296,6 +297,7 @@ class ActionTypeService:
 
     async def used_by(self, ctx: ViewContext, type_id: str) -> list[dict[str, Any]]:
         """关系成员随定义版本；告警总数 / 待处理数始终取当前记录。"""
+        from app.modules.governance.dynamic_guard import read_scope
         ids = (await self.one(ctx, type_id)).get("usedBy") or []
         if not ids:
             return []
@@ -315,9 +317,9 @@ class ActionTypeService:
         counts: dict[str, dict[str, int]] = {}
         for code, status, count in (
             await self.session.execute(
-                select(Alert.rule_code, Alert.status, func.count())
+                await read_scope(self.session, self.session.info.get("governance_user"), select(Alert.rule_code, Alert.status, func.count())
                 .where(Alert.rule_code.in_(ids), Alert.deleted_at.is_(None))
-                .group_by(Alert.rule_code, Alert.status)
+                .group_by(Alert.rule_code, Alert.status), Alert)
             )
         ).all():
             c = counts.setdefault(code, {"alerts": 0, "openAlerts": 0})
@@ -379,13 +381,14 @@ async def run_daily(session: AsyncSession, type_id: str, days: int) -> list[dict
     """近 N 天每日执行量：按真实动作记录聚合，截至今天，缺的天补 0。
     运行数据不分版本，`?ver=` 不影响，按当前 action_type 表找类型（不存在 404）[推断]。"""
     repo = ActionTypeRepo(session)
+    from app.modules.governance.dynamic_guard import read_scope
     at = await repo.get_by_code_or_404(type_id)
     start, end = clock.last_days(days)
     day = func.date(func.timezone(get_settings().display_tz, ActionRun.submitted_at))
     rows = (await session.execute(
-        select(day, ActionRun.status, func.count())
+        await read_scope(session, session.info.get("governance_user"), select(day, ActionRun.status, func.count())
         .where(ActionRun.action_type_code == at.code, ActionRun.deleted_at.is_(None), day >= start, day <= end, ActionRun.submitted_at <= clock.now())
-        .group_by(day, ActionRun.status)
+        .group_by(day, ActionRun.status), ActionRun)
     )).all()
     counts = {(d, status): count for d, status, count in rows}
     out = []

@@ -9,7 +9,7 @@
  * 数据：真模式只读取 /api/admin/v1/roles（src/api/roles.ts），每次写成功后重新拉取；失败显示错误和空态。
  * 本地 mock 仅供显式开发模式使用。
  */
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import AppPagination from '@/components/AppPagination.vue';
@@ -19,6 +19,7 @@ import { useReadonly } from '@/composables/useReadonly';
 import { useUnsavedGuard, confirmDiscard } from '@/composables/useUnsavedGuard';
 import { usePagedQuery } from '@/composables/usePagedQuery';
 import { currentApiContext, isApiError } from '@/api/http';
+import { relationPaths, relationValues } from '@/api/governance';
 import { addRoleMembers, addRoleScope, createRole, deleteRole as apiDeleteRole, loadRolesMeta, loadRolesState, queryRoleMembers, rolesApiOn, removeRoleMember, removeRoleScope, saveRolePermissions, updateRole, type PermObject, type ScopeProp, type RemoteRole } from '@/api/roles';
 import { ADMIN_USERS, paginate, EMPTY, type AdminUser } from '@/mock';
 import { ROLES, FUNC_PAGES, PERM_OBJECTS, SCOPE_PROPS, roleMembers, scopeText, type Role, type FuncLevel, type ObjPerm, type RowScope } from '@/mock/roles';
@@ -49,24 +50,55 @@ const reason = computed(() => viewReason.value || (remote.value && !loaded.value
 /** 权限对象清单：真模式只读 /roles/meta。 */
 const permObjects = ref<PermObject[]>(realRoles ? [] : PERM_OBJECTS);
 const scopeProps = ref<ScopeProp[]>(realRoles ? [] : SCOPE_PROPS);
+const scopeMetaLoading = ref(false), scopeMetaError = ref(''), scopeMetaContext = ref('');
+const scopeMetaReady = computed(() => !realRoles || (loaded.value && scopeMetaContext.value === JSON.stringify(currentApiContext()) && !scopeMetaLoading.value && !scopeMetaError.value));
+let scopeMetaSeq = 0, disposed = false;
+function resetScopeMeta() {
+  ++scopeMetaSeq; ++scopeValueSeq;
+  scopeProps.value = []; scopeMetaContext.value = ''; scopeMetaError.value = ''; scopeMetaLoading.value = false;
+  scopeValues.value = []; scopeValuesError.value = ''; scopeValuesLoading.value = false; scopeValuesMore.value = false;
+}
+async function loadScopeMeta() {
+  if (disposed || !remote.value || !loaded.value || !scopeMetaNeeded.value || scopeMetaReady.value || scopeMetaLoading.value) return;
+  const seq = ++scopeMetaSeq, context = JSON.stringify(currentApiContext());
+  const current = () => !disposed && seq === scopeMetaSeq && context === JSON.stringify(currentApiContext());
+  scopeMetaLoading.value = true; scopeMetaError.value = ''; scopeMetaContext.value = ''; scopeProps.value = [];
+  try {
+    const [meta, paths] = await Promise.all([loadRolesMeta(), relationPaths()]);
+    if (!current()) return;
+    if (!meta) throw new Error('行级范围元数据未加载');
+    scopeProps.value = [...meta.scopeProps, ...paths.items]; scopeMetaContext.value = context;
+  } catch (e) { if (current()) scopeMetaError.value = isApiError(e) ? e.message : String(e); }
+  finally { if (current()) scopeMetaLoading.value = false; }
+}
 /** 失败清空数据并阻止修改，显式 mock 模式保留本地数据。 */
 let reloadSeq = 0;
 async function reload(afterWrite = false) {
   const my = ++reloadSeq;
   if (!remote.value) return;
-  const context = JSON.stringify(currentApiContext());
+  const context = JSON.stringify(currentApiContext()), withScopeValues = scopeMetaNeeded.value;
+  resetScopeMeta();
+  scopeMetaLoading.value = withScopeValues;
   loading.value = true; loaded.value = false; loadError.value = '';
   roles.value = []; members.value = {}; allUsers.value = []; permObjects.value = []; scopeProps.value = [];
   try {
-    const [st, meta] = await Promise.all([loadRolesState(), loadRolesMeta()]);
-    if (my !== reloadSeq || context !== JSON.stringify(currentApiContext())) return;
+    const [st, meta, paths] = await Promise.all([
+      loadRolesState(), loadRolesMeta(withScopeValues), withScopeValues ? relationPaths() : Promise.resolve(null),
+    ]);
+    if (disposed || my !== reloadSeq || context !== JSON.stringify(currentApiContext())) return;
     if (!st || !meta) throw new Error('角色数据或权限元数据未加载');
-    permObjects.value = meta.permObjects; scopeProps.value = meta.scopeProps;
+    permObjects.value = meta.permObjects;
+    if (withScopeValues) {
+      if (!paths) throw new Error('关系范围元数据未加载');
+      scopeProps.value = [...meta.scopeProps, ...paths.items]; scopeMetaContext.value = context;
+      scopeMetaLoading.value = false;
+    }
     roles.value = st.roles; members.value = st.members; allUsers.value = st.users; loaded.value = true;
+    if (scopeMetaNeeded.value) await loadScopeMeta();
   } catch (e) {
-    if (my === reloadSeq && context === JSON.stringify(currentApiContext())) loadError.value = isApiError(e) ? e.message : String(e);
+    if (!disposed && my === reloadSeq && context === JSON.stringify(currentApiContext())) loadError.value = isApiError(e) ? e.message : String(e);
     throw e;
-  } finally { if (my === reloadSeq) loading.value = false; }
+  } finally { if (!disposed && my === reloadSeq) { loading.value = false; if (withScopeValues) scopeMetaLoading.value = false; } }
 }
 /** 后台写操作：成功后重新拉取；失败提示后台的报错（不改本地数据） */
 async function call<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -87,15 +119,19 @@ async function call<T>(fn: () => Promise<T>): Promise<T | undefined> {
 }
 const lockOf = (r: Role) => (r as Partial<RemoteRole>).lockVersion;
 async function loadInitial() {
+  const context = JSON.stringify(currentApiContext());
   try { await reload(); if (loaded.value && !dirty.value) resetDraft(); }
-  catch (e) { message.error(isApiError(e) ? e.message : e instanceof Error ? e.message : '加载失败，请稍后重试'); }
+  catch (e) { if (!disposed && context === JSON.stringify(currentApiContext())) message.error(isApiError(e) ? e.message : e instanceof Error ? e.message : '加载失败，请稍后重试'); }
 }
 onMounted(loadInitial);
+onBeforeUnmount(() => { disposed = true; ++reloadSeq; resetScopeMeta(); });
 watch(() => JSON.stringify(currentApiContext()), () => { loaded.value = false; void loadInitial(); }, { flush: 'sync' });
 const role = computed(() => roles.value.find((r) => r.id === q('role')) ?? roles.value[0]);
 const locked = computed(() => readonly.value || !role.value || role.value.builtIn);
 const lockReason = computed(() => reason.value || (role.value?.builtIn ? '内置角色不能修改，可复制后再改' : ''));
 const tab = computed({ get: () => q('tab') || 'func', set: (v: string) => setQuery({ tab: v === 'func' ? undefined : v }) });
+const scopeMetaNeeded = computed(() => tab.value === 'row' || q('form') === 'scope');
+watch([loaded, scopeMetaNeeded], () => { if (loaded.value && scopeMetaNeeded.value) void loadScopeMeta(); });
 
 // 功能 / 对象权限草稿
 const draft = reactive<{ func: Record<string, FuncLevel>; objs: ObjPerm[] }>({ func: {}, objs: [] });
@@ -190,6 +226,7 @@ const scols = [
   { title: '操作', key: 'op', width: 90 },
 ];
 async function removeScope(s: RowScope) {
+  if (locked.value || !scopeMetaReady.value) return;
   const ok = await confirm.ask({
     title: '删除行级范围', target: `${s.objType}：${scopeText(s)}`, okText: '删除', danger: true,
     fields: [{ label: '角色', value: role.value.name }, { label: '影响成员', value: `${members.value[role.value.id].length} 人` }],
@@ -206,15 +243,31 @@ async function removeScope(s: RowScope) {
   message.success('已删除行级范围');
 }
 const scopeForm = reactive<{ key?: string; values: string[] }>({ key: undefined, values: [] });
-const scopeOpts = computed(() => scopeProps.value.map((p) => ({ value: `${p.objType}.${p.prop}`, label: `${p.objType} · ${p.displayName ?? p.prop}`, disabled: !p.values.length })));
+const scopeOpts = computed(() => scopeProps.value.map((p) => ({ value: `${p.objType}.${p.prop}`, label: `${p.objType} · ${p.displayName ?? p.prop}`, disabled: !p.path && !p.values.length })));
 const scopeProp = computed(() => scopeProps.value.find((p) => `${p.objType}.${p.prop}` === scopeForm.key));
 const scopeDirty = computed(() => q('form') === 'scope' && (!!scopeForm.key || scopeForm.values.length > 0));
-watch(() => scopeForm.key, () => { scopeForm.values = []; });
+const scopeValues = ref<string[]>([]), scopeValuesLoading = ref(false), scopeValuesError = ref(''), scopeValuesMore = ref(false);
+let scopeValueSeq = 0;
+async function loadScopeValues(kw = '') {
+  const p = scopeProp.value, seq = ++scopeValueSeq, context = JSON.stringify(currentApiContext());
+  scopeValues.value = []; scopeValuesError.value = ''; scopeValuesMore.value = false;
+  if (!p?.path || !scopeMetaReady.value || q('form') !== 'scope') { scopeValuesLoading.value = false; return; }
+  scopeValuesLoading.value = true;
+  try {
+    if (!p.objectTypeCode) throw new Error('对象编码缺失');
+    const result = await relationValues(p.objectTypeCode, p.prop, kw);
+    if (seq !== scopeValueSeq || context !== JSON.stringify(currentApiContext())) return;
+    scopeValues.value = result.items; scopeValuesMore.value = result.hasMore;
+  } catch (e) { if (seq === scopeValueSeq) scopeValuesError.value = isApiError(e) ? e.message : String(e); }
+  finally { if (seq === scopeValueSeq) scopeValuesLoading.value = false; }
+}
+watch(() => JSON.stringify([scopeForm.key, currentApiContext(), q('form') === 'scope']), () => { scopeForm.values = []; void loadScopeValues(); });
 const openScope = () => { scopeForm.key = undefined; scopeForm.values = []; setQuery({ form: 'scope' }); };
 const closeScope = async () => { if (scopeDirty.value && !(await confirmDiscard())) return; setQuery({ form: undefined }); };
 async function addScope() {
+  if (locked.value || !scopeMetaReady.value) { message.warning(scopeMetaError.value || lockReason.value || '请先成功加载行级范围元数据'); return; }
   const p = scopeProp.value;
-  if (!p || !scopeForm.values.length) { message.warning('请选择属性和取值'); return; }
+  if (!p || !scopeForm.values.length || scopeValuesLoading.value || scopeValuesError.value) { message.warning(scopeValuesError.value || '请选择属性和有效取值'); return; }
   if (remote.value) {
     const id = role.value.id;
     const body = { objType: p.objType, ...(p.objectTypeCode ? { objectTypeCode: p.objectTypeCode } : {}), prop: p.prop, op: (scopeForm.values.length > 1 ? '∈' : '=') as RowScope['op'], values: [...scopeForm.values] };
@@ -479,7 +532,7 @@ async function saveNewRole() {
       <div v-else-if="tab === 'row'" class="rl-body">
         <div class="rl-rowhead">
           <span class="t-12 c-2">只能使用已登记为行级依据的可筛选文本或枚举属性。同一对象类型的多条范围取并集；没有范围的对象类型{{ role.defaultDeny ? '默认不可见' : '可见全部行' }}。</span>
-          <a-tooltip :title="lockReason"><a-button :disabled="locked" @click="openScope">添加范围</a-button></a-tooltip>
+          <a-tooltip :title="lockReason"><a-button :disabled="locked || !scopeMetaReady" @click="openScope">添加范围</a-button></a-tooltip>
         </div>
         <div class="rl-rule t-12 c-2">
           <div><span class="c-1 fw-600">未配置范围的对象：</span><template v-if="role.defaultDeny">默认<span class="c-1">不可见</span>（业务查看类角色，需逐个对象配置范围才可见）</template><template v-else>可见全部行</template><template v-if="unscopedObjs.length"> · 本角色：{{ unscopedObjs.join('、') }} → {{ role.defaultDeny ? '不可见' : '全部行' }}</template></div>
@@ -488,11 +541,13 @@ async function saveNewRole() {
         <a-table class="rl-scope-table" size="small" row-key="id" :scroll="{ x: 700 }" :columns="scols" :data-source="role.scopes" :pagination="false" :locale="{ emptyText: role.defaultDeny ? '没有行级范围：所有对象默认不可见' : '没有行级范围：可见对象的全部行' }">
           <template #bodyCell="{ column, record }">
             <span v-if="column.key === 'cond'" class="c-1">{{ record.prop }} <span class="num">{{ record.op }}</span> {{ record.values.join('、') }}</span>
-            <a-tooltip v-else-if="column.key === 'op'" :title="lockReason"><a :class="{ 'rl-dis': locked }" @click="!locked && removeScope(record)">删除范围</a></a-tooltip>
+            <a-tooltip v-else-if="column.key === 'op'" :title="lockReason"><a :class="{ 'rl-dis': locked || !scopeMetaReady }" @click="!locked && scopeMetaReady && removeScope(record)">删除范围</a></a-tooltip>
           </template>
         </a-table>
         <div class="t-14 fw-600 c-1 rl-h">可用的权限依据属性</div>
-        <div class="rl-props">
+        <a-alert v-if="scopeMetaError" type="error" show-icon :message="scopeMetaError"><template #action><a-button size="small" @click="loadScopeMeta">重试</a-button></template></a-alert>
+        <a-spin v-else-if="!scopeMetaReady" tip="正在加载权限依据属性与取值" />
+        <div v-else class="rl-props">
           <div v-for="p in scopeProps" :key="p.objType + p.prop" class="rl-prop">
             <span class="c-1">{{ p.objType }} · {{ p.displayName ?? p.prop }}</span>
             <span class="t-12 c-3 rl-ellip">{{ p.values.join('、') || '暂无可选取值' }}</span>
@@ -547,16 +602,19 @@ async function saveNewRole() {
   </a-drawer>
 
   <a-drawer v-if="role" :open="q('form') === 'scope'" :width="520" :title="`添加行级范围 · ${role.name}`" @close="closeScope">
-    <a-form layout="vertical">
+    <a-alert v-if="scopeMetaError" type="error" show-icon :message="scopeMetaError"><template #action><a-button size="small" @click="loadScopeMeta">重试</a-button></template></a-alert>
+    <a-spin v-else-if="!scopeMetaReady" tip="正在加载权限依据属性与取值" />
+    <a-form v-if="scopeMetaReady" layout="vertical">
       <a-form-item label="权限依据属性" required><a-select v-model:value="scopeForm.key" :options="scopeOpts" placeholder="对象类型 · 属性" /></a-form-item>
       <a-form-item label="取值" required>
-        <a-select v-model:value="scopeForm.values" mode="multiple" :disabled="!scopeProp" :options="(scopeProp?.values ?? []).map((v) => ({ value: v, label: v }))" placeholder="可多选" />
+        <a-select v-model:value="scopeForm.values" mode="multiple" show-search :disabled="!scopeProp || scopeValuesLoading" :loading="scopeValuesLoading" :filter-option="scopeProp?.path ? false : undefined" :options="(scopeProp?.path ? [...new Set([...scopeValues, ...scopeForm.values])] : scopeProp?.values ?? []).map((v) => ({ value: v, label: v }))" placeholder="可多选" @search="(kw: string) => { if (scopeProp?.path) void loadScopeValues(kw); }" />
+        <div v-if="scopeValuesError" class="c-danger">{{ scopeValuesError }}</div><div v-else-if="scopeValuesMore" class="t-12 c-3">仅显示前200个值，请输入关键词缩小范围</div>
       </a-form-item>
     </a-form>
     <div v-if="scopeProp && scopeForm.values.length" class="rl-preview t-14 c-1">{{ scopeProp.objType }}：{{ scopeProp.prop }} {{ scopeForm.values.length > 1 ? '∈' : '=' }} {{ scopeForm.values.join('、') }}</div>
     <div class="t-12 c-3">只列出已发布对象中可执行行级过滤的可筛选文本、枚举属性；空取值属性暂不可选。</div>
     <template #footer>
-      <div class="rl-foot"><a-button @click="closeScope">取消</a-button><a-button type="primary" :disabled="locked || !scopeProp || !scopeForm.values.length" @click="addScope">添加</a-button></div>
+      <div class="rl-foot"><a-button @click="closeScope">取消</a-button><a-button type="primary" :disabled="locked || !scopeMetaReady || !scopeProp || !scopeForm.values.length || scopeValuesLoading || !!scopeValuesError" @click="addScope">添加</a-button></div>
     </template>
   </a-drawer>
 

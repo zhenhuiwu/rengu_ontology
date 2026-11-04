@@ -40,14 +40,14 @@ export async function loadRolesState(): Promise<RolesState | null> {
 
 export interface ActionPermissionRef { id: string; api: string; name: string }
 export interface PermObject { name: string; api: string; actions: string[]; actionRefs?: ActionPermissionRef[] }
-export interface ScopeProp { objType: string; objectTypeCode?: string; prop: string; values: string[]; displayName?: string | null; dataType?: string }
+export interface ScopeProp { objType: string; objectTypeCode?: string; prop: string; values: string[]; displayName?: string | null; dataType?: string; path?: boolean }
 export interface RolesMeta { permObjects: PermObject[]; scopeProps: ScopeProp[] }
 
 /** 权限元数据：对象清单和可执行范围属性来自已发布本体，空本体由后台用 mock 兜底。
  * 仅 mock 模式返回 null；真实请求错误原样抛出，空 scopeProps 不代表加载失败。 */
-export async function loadRolesMeta(): Promise<RolesMeta | null> {
+export async function loadRolesMeta(withScopeValues = true): Promise<RolesMeta | null> {
   if (!api.isReal()) return null;
-  return await api.get<RolesMeta>('/roles/meta');
+  return await api.get<RolesMeta>('/roles/meta', { query: { withScopeValues } });
 }
 
 export const createRole = (b: { name: string; desc?: string; perms?: string[]; copyFrom?: string }) =>

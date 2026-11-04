@@ -8,7 +8,7 @@
  */
 import { shallowReactive, shallowRef } from 'vue';
 import { RELEASES as MOCK_RELEASES, type Release } from '@/mock/releases';
-import { apiClient, currentApiContext } from './http';
+import { apiClient, currentApiContext, type PageResult } from './http';
 
 const api = apiClient('versioning');
 
@@ -17,6 +17,7 @@ export type { Release };
 /** 后台 ReleaseOut（app/modules/versioning/schemas.py）；比前端多 parentVer/kind/rollbackOf/changeOrderIds */
 export interface ReleaseDto {
   ver: string; publishedAt: string; by: string; note: string;
+  scope?: string;
   parentVer?: string | null; kind?: '发布' | '回滚'; rollbackOf?: string | null; changeOrderIds?: string[];
 }
 export interface ReleaseListDto { items: ReleaseDto[]; current: string | null }
@@ -33,6 +34,9 @@ export const hasConfirmedEmptyRelease = () => emptyReleaseContext.value === JSON
 
 export const fetchReleases = () => api.get<ReleaseListDto>('/releases');
 export const fetchCurrentRelease = () => api.get<CurrentVersionDto>('/releases/current');
+export type ReleasePageDto = PageResult<ReleaseDto> & { current: string | null };
+export const fetchReleasePage = (query: { page: number; size: number; kw?: string }, signal?: AbortSignal) =>
+  api.get<ReleasePageDto>('/releases', { query, signal });
 
 export type LoadReleasesResult =
   | { kind: 'mock' }

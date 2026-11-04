@@ -6,7 +6,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.orm import undefer
 from app.common.auth import CurrentUserDep, check_func
 from app.common.sql_guard import _GOVERNED, _invalidate_bound, load_governed_tables
-from app.core.errors import Forbidden, NotFound
+from app.core.errors import AppError, Forbidden, NotFound
 from app.db.dialects import get_adapter
 from app.db.session import SessionDep
 from app.modules.data.governed_binding import inspect_table, invalid, validate_binding, validate_supplementary
@@ -43,6 +43,7 @@ class ExternalBindingIn(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     version: int = Field(ge=0)
     read_columns: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(alias="readColumns", min_length=1, max_length=100)
+    declared_unique_key: str | None = Field(default=None, alias="declaredUniqueKey", max_length=128)
 
 
 async def external_binding_context(session, user, code):
@@ -56,10 +57,10 @@ async def external_binding_context(session, user, code):
     if not physical_identifier(schema) or not physical_identifier(table):
         raise invalid("外部 schema 或表名无效")
     sources = list(await session.scalars(select(Datasource).where((Datasource.code == obj.datasource_name) | (Datasource.name == obj.datasource_name))))
-    if len(sources) != 1 or sources[0].type != DsType.dm8:
-        raise invalid("对象必须绑定唯一的达梦数据源")
+    if len(sources) != 1 or sources[0].type not in (DsType.dm8, DsType.mysql):
+        raise invalid("对象必须绑定唯一的达梦或 MySQL 数据源")
     source = sources[0]
-    if source.ssl:
+    if source.type == DsType.dm8 and source.ssl:
         raise invalid("达梦 TLS 身份校验尚不可用，无法启用此只读绑定")
     from app.modules.data.ontology_import import inspect_source
     from app.modules.data.ontology_schemas import ImportPreviewIn
@@ -76,7 +77,11 @@ async def external_binding_context(session, user, code):
 async def external_detail(code: str, session: SessionDep, user: CurrentUserDep):
     obj, source, schema, table, allowed, primary = await external_binding_context(session, user, code)
     row = await session.scalar(select(ExternalReadBinding).where(ExternalReadBinding.object_code == code))
-    return {"version": row.lock_version if row else 0, "datasourceId": source.code, "schema": schema, "table": table, "availableColumns": sorted(allowed), "requiredColumn": primary, "readColumns": row.read_columns if row else []}
+    from app.modules.data import connector
+    from app.modules.data.external_cdc import cfg_for
+    reflected = await connector.inspect_tables(source.type.value, cfg_for(source), schema, [table])
+    return {"version": row.lock_version if row else 0, "datasourceId": source.code, "schema": schema, "table": table, "availableColumns": sorted(allowed), "requiredColumn": primary, "readColumns": row.read_columns if row else [],
+            "sourceKind": reflected[0].kind, "declaredUniqueKey": row.declared_unique_key if row else None}
 
 
 @router.put("/external-read-bindings/{code}")
@@ -86,7 +91,6 @@ async def external_save(code: str, body: ExternalBindingIn, session: SessionDep,
     authorize(user)
     await get_adapter(session).xact_lock(session, f'external.mirror.{user.ontology_id}.{code}')
     from app.modules.data.external_cdc import require_paused, publish_metadata
-    cdc_sub = await require_paused(session, code)
     await get_adapter(session).xact_lock(session, f"external.read.binding.{user.ontology_id}.{code}")
     obj, source, schema, table, allowed, primary = await external_binding_context(session, user, code)
     row = await session.scalar(select(ExternalReadBinding).where(ExternalReadBinding.object_code == code).with_for_update())
@@ -94,17 +98,37 @@ async def external_save(code: str, body: ExternalBindingIn, session: SessionDep,
         raise VersionConflict()
     if len(set(body.read_columns)) != len(body.read_columns) or not set(body.read_columns) <= allowed or primary not in body.read_columns:
         raise invalid("读取字段须来自公开对象映射且包含主键")
+    from app.modules.data import connector
+    from app.modules.data.external_cdc import cfg_for
+    cfg = cfg_for(source)
+    reflected = await connector.inspect_tables(source.type.value, cfg, schema, [table])
+    if reflected[0].kind == "view":
+        if body.declared_unique_key != primary:
+            raise AppError("视图须显式声明当前对象唯一键；同步时仍会验证空值和重复", code="VIEW_IDENTIFIER_UNAVAILABLE", status_code=422)
+    elif body.declared_unique_key is not None:
+        raise invalid("只有视图需要声明唯一键；表必须使用真实数据库主键")
+    # Re-saving the same grant must not invalidate a healthy CDC baseline.
+    if (row and (row.datasource_code, row.schema_name, row.table_name) == (source.code, schema, table)
+            and set(row.read_columns) == set(body.read_columns)
+            and row.declared_unique_key == body.declared_unique_key):
+        return {"version": row.lock_version, "datasourceId": source.code, "schema": schema, "table": table,
+                "readColumns": row.read_columns, "changed": False}
+    cdc_sub = await require_paused(session, code)
+    if reflected[0].kind == "view":
+        await connector.validate_view_key(source.type.value, cfg, schema, table, primary)
     if row is None:
         row = ExternalReadBinding(object_code=code, datasource_code=source.code, schema_name=schema, table_name=table, read_columns=[], created_by=user.id)
         session.add(row)
     row.datasource_code, row.schema_name, row.table_name, row.read_columns = source.code, schema, table, body.read_columns
+    row.declared_unique_key = body.declared_unique_key
     if cdc_sub:
         cdc_sub.restart_required, cdc_sub.phase = True, 'failed'
         cdc_sub.error_code, cdc_sub.error = 'CDC_BINDING_CHANGED', '读取绑定版本已变化，请重新计划并建立CDC基线'
         await publish_metadata(session, cdc_sub)
     await insert_audit(session, actor=f"{user.name}（{user.id}）", action="修改外部对象只读绑定", target=code, ip=request.client.host if request.client else "", created_by=user.id)
     await session.flush()
-    return {"version": row.lock_version, "datasourceId": source.code, "schema": schema, "table": table, "readColumns": row.read_columns}
+    return {"version": row.lock_version, "datasourceId": source.code, "schema": schema, "table": table,
+            "readColumns": row.read_columns, "changed": True}
 
 
 @router.delete("/external-read-bindings/{code}")

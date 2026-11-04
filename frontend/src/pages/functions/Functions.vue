@@ -145,20 +145,22 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
     <a-tooltip :title="reason"><a-button :type="formOpen ? 'default' : 'primary'" :disabled="readonly" @click="guard(() => setQuery({ form: 'new' }))">新建函数</a-button></a-tooltip>
   </Teleport>
   <div class="fn">
-    <div class="panel fn-list">
+    <div class="panel fn-list side-list">
       <div class="fn-filters">
-        <a-input-search v-model:value="kw" placeholder="函数名 / 中文名" allow-clear />
+        <a-input-search v-model:value="kw" placeholder="搜索函数" allow-clear />
         <a-select v-model:value="statusF" class="fn-sel" :options="['全部', '已发布', '草稿', '已停用'].map((v) => ({ value: v, label: v }))" />
       </div>
-      <div class="fn-items">
-        <div v-for="f in listPaged.items" :key="f.id" class="fn-item" :class="{ on: f.id === fn.id }" @click="select(f.id)">
-          <div class="fn-l1" :title="`${f.name} · ${f.title} · ${f.version} · ${f.usedBy.length ? f.usedBy.length + ' 处使用' : '未使用'}`">
-            <span class="t-14 fw-600 c-1 num fn-ellip">{{ f.name }}</span>
+      <div class="fn-items side-list-items">
+        <div v-for="f in listPaged.items" :key="f.id" class="fn-item side-list-item" :class="{ on: f.id === fn.id, active: f.id === fn.id }" @click="select(f.id)">
+          <div class="fn-l1 side-list-row" :title="`${f.name} · ${f.title} · ${f.version} · ${f.usedBy.length ? f.usedBy.length + ' 处使用' : '未使用'}`">
+            <span class="t-14 num fn-ellip side-list-name">{{ f.name }}</span>
             <a-badge :status="statusBadge(f.status)" :text="f.status" class="fn-badge" />
           </div>
         </div>
       </div>
-      <AppPagination v-model:page="lpage" variant="simple" :total="listRows.length" :size="LSIZE" unit="个函数" class="fn-pager" />
+      <div class="fn-pager-foot side-list-foot">
+        <AppPagination v-model:page="lpage" variant="simple" :total="listRows.length" :size="LSIZE" unit="个函数" />
+      </div>
     </div>
 
     <div class="panel fn-detail">
@@ -278,17 +280,14 @@ const select = (id: string) => guard(() => setQuery({ fn: id, form: undefined })
 
 <style scoped>
 .fn { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.fn-list { width: 340px; flex: none; }
-.fn-filters { display: flex; gap: 8px; padding: 12px 16px; flex: none; }
+.fn-list { flex: none; }
+.fn-filters { display: flex; gap: 8px; padding: 12px 12px 8px; flex: none; }
 .fn-sel { width: 100px; flex: none; }
-.fn-items { flex: 1; min-height: 0; overflow: hidden; }
-.fn-item { padding: 10px 16px; border-bottom: var(--border); border-left: 3px solid transparent; cursor: pointer; }
-.fn-item:hover { background: var(--g2); }
-.fn-item.on { background: var(--brand-bg); border-left-color: var(--brand); }
+.fn-items { flex: 1; min-height: 0; }
 .fn-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .fn-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.fn-item :deep(.ant-badge-status-text) { color: var(--g9); font-size: 12px; line-height: 18px; font-weight: 400; }
 .fn-badge { margin-left: auto; flex: none; }
-.fn-pager { padding: 6px 16px 8px; }
 .fn-detail { flex: 1; min-width: 0; }
 .fn-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 14px 20px 4px; }
 .fn-title { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }

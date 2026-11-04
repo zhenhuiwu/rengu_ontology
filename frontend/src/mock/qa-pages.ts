@@ -96,7 +96,7 @@ function build(): QaPageFull[] {
     const fail = i === 4 || i === 17;
     const fromWb = i < 8 || i % 3 === 0;
     return {
-      id: p.id, name: p.name, owner: '王敏', scope: SCOPES[i % SCOPES.length],
+      id: p.id, name: p.name, owner: 'admin', scope: SCOPES[i % SCOPES.length],
       sourceKind: fromWb ? '问数工作台' : i % 3 === 1 ? '模板' : '手动新建',
       source: fromWb ? `问数工作台 · 会话「${['华东大区复购下降原因', '门店出库超时排查', '9 月复购客户分析', '双 11 备货节奏', '会员运营周会', '品类毛利对比', '缺货门店盘点', '促销复盘'][i % 8]}」` : i % 3 === 1 ? `模板「${TEMPLATE_NAMES[i % TEMPLATE_NAMES.length]}」` : '手动新建',
       cards, dataAsOf: fail ? '2026-10-23 23:00' : DATA_CUTOFF,

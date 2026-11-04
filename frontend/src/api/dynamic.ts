@@ -57,10 +57,10 @@ const alertFilters = (q: Omit<AlertQuery, 'page' | 'size'>) => ({
   status: q.status, level: opt(q.level), ruleId: opt(q.ruleId), objKind: opt(q.objKind),
   dim: q.dim?.length ? q.dim : undefined, kw: q.kw?.trim() || undefined,
 });
-export const listAlerts = (q: AlertQuery) =>
-  api.get<AlertPageDto>('/alerts', { query: { ...alertFilters(q), page: q.page, size: q.size } });
-export const getAlertFacets = (q: Omit<AlertQuery, 'page' | 'size'>) => api.get<AlertFacetsDto>('/alerts/facets', { query: alertFilters(q) });
-export const getAlert = (id: string) => api.get<AlertDetailDto>(`/alerts/${enc(id)}`);
+export const listAlerts = (q: AlertQuery, signal?: AbortSignal) =>
+  api.get<AlertPageDto>('/alerts', { query: { ...alertFilters(q), page: q.page, size: q.size }, signal });
+export const getAlertFacets = (q: Omit<AlertQuery, 'page' | 'size'>, signal?: AbortSignal) => api.get<AlertFacetsDto>('/alerts/facets', { query: alertFilters(q), signal });
+export const getAlert = (id: string, signal?: AbortSignal) => api.get<AlertDetailDto>(`/alerts/${enc(id)}`, { signal });
 export const deleteAlert = (id: string, lockVersion: number) => inContext(api.delete<void>(`/alerts/${enc(id)}`, { query: { lockVersion } }));
 export const claimAlert = (id: string) => inContext(api.post<AlertDetailDto>(`/alerts/${enc(id)}:claim`));
 export const batchClaimAlerts = (ids: string[]) => inContext(api.post<{ claimed: number; ids: string[] }>('/alerts:batch-claim', { ids }));
@@ -69,8 +69,8 @@ export const closeAlert = (id: string, as: '已解决' | '已忽略', reason: st
 export const batchCloseAlerts = (ids: string[], as: '已解决' | '已忽略', reason: string) =>
   inContext(api.post<{ closed: number; ids: string[] }>('/alerts:batch-close', { ids, as, reason }));
 export const startAlertAction = (id: string, params: Record<string, unknown>) => inContext(api.post<{ alert: AlertDetailDto; action: ActionRunDetailDto }>(`/alerts/${enc(id)}:start-action`, { params }));
-export const listPeople = (alertId: string) => api.get<{ id: string; name: string }[]>('/people', { query: { alertId } });
-export const getAlertMeta = () => api.get<{ rules: { id: string; name: string }[] }>('/alerts/meta');
+export const listPeople = (alertId: string, signal?: AbortSignal) => api.get<{ id: string; name: string }[]>('/people', { query: { alertId }, signal });
+export const getAlertMeta = (signal?: AbortSignal) => api.get<{ rules: { id: string; name: string }[] }>('/alerts/meta', { signal });
 /** AI 处置建议（决策评估，只建议不暂存；caller.kind = system 为告警产生后规则身份自动评估） */
 export interface DecisionReason { kind: string; text: string; [k: string]: unknown }
 export interface DecisionUnfilled { api: string; name?: string; type?: string; default?: unknown; mapping?: string | null; reason?: string }
@@ -88,7 +88,7 @@ export interface DecisionDto {
   decisionId: string; createdAt: string; caller: { kind?: string; name?: string; system?: { trigger?: string; ruleId?: string } | null };
   alertId?: string | null; error?: string | null; recommendations: DecisionRecommendation[]; notes: string[];
 }
-export const getAlertDecision = (id: string) => api.get<{ alertId: string; decision: DecisionDto | null }>(`/alerts/${enc(id)}/decision`);
+export const getAlertDecision = (id: string, signal?: AbortSignal) => api.get<{ alertId: string; decision: DecisionDto | null }>(`/alerts/${enc(id)}/decision`, { signal });
 export const evaluateAlertDecision = (id: string) => inContext(api.post<{ alertId: string; decision: DecisionDto }>(`/alerts/${enc(id)}/decision:evaluate`));
 
 // ---------------- 动作 ----------------
@@ -127,15 +127,16 @@ const clean = <T extends object>(o: T): T => {
   return r as T;
 };
 
-export async function listActionRuns(q: ActionRunQuery): Promise<ActionRunPageDto> {
+export async function listActionRuns(q: ActionRunQuery, signal?: AbortSignal): Promise<ActionRunPageDto> {
   const r = await api.get<ActionRunPageDto>('/action-runs', {
     query: { tab: q.tab, status: opt(q.status), action: opt(q.action), sysId: opt(q.sysId), kw: q.kw?.trim() || undefined, page: q.page, size: q.size },
+    signal,
   });
   return { ...r, items: r.items.map(clean) };
 }
-export const getActionRun = async (id: string) => clean(await api.get<ActionRunDetailDto>(`/action-runs/${enc(id)}`));
+export const getActionRun = async (id: string, signal?: AbortSignal) => clean(await api.get<ActionRunDetailDto>(`/action-runs/${enc(id)}`, { signal }));
 export const deleteActionRun = (id: string, lockVersion: number) => inContext(api.delete<void>(`/action-runs/${enc(id)}`, { query: { lockVersion } }));
-export const getActionMeta = () => api.get<ActionMetaDto>('/actions/meta');
+export const getActionMeta = (signal?: AbortSignal) => api.get<ActionMetaDto>('/actions/meta', { signal });
 export const confirmActionRun = async (id: string) => clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:confirm`)));
 export const withdrawActionRun = async (id: string, reason: string) => clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:withdraw`, { reason })));
 export const approveActionRun = async (id: string) => clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:approve`)));
@@ -145,6 +146,8 @@ export const resubmitActionRun = async (id: string) => {
 };
 export const reconcileActionRun = async (id: string, result: ReconcileResult, note: string) =>
   clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:reconcile`, { result, note })));
+export const queryActionRunResult = async (id: string) =>
+  clean(await inContext(api.post<ActionRunDetailDto>(`/action-runs/${enc(id)}:query-result`)));
 /** 暂存动作（规则 / 问数 / 推演 / 手动入口用；动作中心、告警页本身没有暂存入口） */
 export const stageActionRun = async (body: Record<string, unknown>) => clean(await inContext(api.post<ActionRunDetailDto>('/action-runs:stage', body)));
 export interface LaunchParam { name: string; api: string; type: string; required: boolean; def?: string; rule?: string }
@@ -168,7 +171,7 @@ export interface RuleMetaDto {
   objects: { id: string; name: string; api: string; fields: RuleEditorField[] }[];
   metrics: { id: string; name: string; version: string; versions: string[] }[];
   events: { id: string; name: string; objKind: string; fields: RuleEditorField[] }[];
-  functions: { id: string; name: string; version: string; inputs: string[] }[];
+  functions: { id: string; name: string; version: string; inputs: string[]; outputPaths?: { path: string[]; type: string; label: string }[] }[];
   relations: { id: string; name: string; from: string; to: string; fields: { api: string; name: string }[] }[];
   runAsUserId: string;
 }
@@ -311,7 +314,13 @@ import type { Lifecycle, LcDraft, LcIllegal, LcChange } from '@/mock/lifecycle';
 export interface LifecycleDto extends Lifecycle { draft: { cr: string | null; edits: LcDraft } | null; readonly?: boolean }
 
 export const getLifecycle = (objectId: string, draftCr?: string) =>
-  api.get<LifecycleDto>(`/object-types/${enc(objectId)}/lifecycle`, { query: draftCr ? { view: 'draft', cr: draftCr } : {} });
+  api.get<LifecycleDto | null>(`/object-types/${enc(objectId)}/lifecycle`, { query: { optional: true, ...(draftCr ? { view: 'draft', cr: draftCr } : {}) } });
+export interface LifecycleSave {
+  field: string; desc: string; expectedVersion: number; releaseLockVersion: number;
+  states: Lifecycle['states']; transitions: Lifecycle['transitions'];
+}
+export const saveLifecycle = (objectId: string, body: LifecycleSave) =>
+  api.put<{ ver: string; version: number }>(`/object-types/${enc(objectId)}/lifecycle`, body);
 export function listLifecycleChanges(objectId: string, illegal: boolean, page: number, size: number) {
   return api.get<PageResult<LcChange>>(`/object-types/${enc(objectId)}/lifecycle/changes`, { query: { illegal: illegal ? 1 : 0, page, size } });
 }

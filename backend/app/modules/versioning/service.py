@@ -154,16 +154,16 @@ class VersioningService:
                     dedup_window(definition.get("dedupWindow") or "")
                 except AppError as error:
                     issues.append({"section": "eventTypes", "id": code, "message": error.message})
-        from app.modules.static.metric_trial import compile_metric, execution_bindings
+        from app.modules.static.metric_validation import validate_metric_definition
         from app.modules.static.models import Metric, MetricStatus, ObjectType
         await ensure_governed_tables(session)
         object_rows = list(await session.scalars(select(ObjectType)))
         metrics = await session.scalars(select(Metric).where(Metric.status == MetricStatus.published))
         for metric in metrics:
-            definition = {"formula": metric.formula, "def": metric.def_rows}
+            definition = {"id": metric.code, "version": metric.version,
+                          "formula": metric.formula, "def": metric.def_rows}
             try:
-                compile_metric(definition, object_rows, require_ontology_id(session),
-                               await execution_bindings(session, object_rows, definition), session=session)
+                await validate_metric_definition(session, user, definition, object_rows)
             except AppError as error:
                 issues.append({"section": "metrics", "id": metric.code, "message": error.message})
         from app.modules.action.condition_expr import Unavailable

@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from sqlalchemy import and_, case, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 
 from app.common.auth import check_func, resolve_user
 from app.common.ontology import require_ontology_id
@@ -218,15 +218,12 @@ async def dispatch_workspace(session, *, limit: int = 100):
     ontology_id = require_ontology_id(session)
     # One head per page subscription; a deferred failed head cannot be overtaken by newer updates.
     # shortcut: aggregate retained history; add a subscription cursor if this scan becomes costly.
+    page_id = OutboxEvent.payload["pageId"].as_string()
     heads = (
-        select(OutboxEvent.payload["pageId"].as_string().label("page_id"),
-               func.min(OutboxEvent.id).filter(OutboxEvent.dispatched_at.is_(None)).label("head_id"),
-               func.max(case((OutboxEvent.attempts > 0,
-                              func.coalesce(OutboxEvent.dispatched_at, OutboxEvent.available_at)),
-                             else_=None)).label("last_served"))
+        select(func.min(OutboxEvent.id).label("head_id"))
         .where(OutboxEvent.topic == "qa.page.subscription",
                OutboxEvent.payload["ontologyId"].as_string() == str(ontology_id))
-        .group_by(OutboxEvent.payload["pageId"].as_string())
+        .group_by(page_id)
         .subquery()
     )
     rows = list(
@@ -239,7 +236,7 @@ async def dispatch_workspace(session, *, limit: int = 100):
                 OutboxEvent.dispatched_at.is_(None),
                 OutboxEvent.available_at <= clock.now(),
             )
-            .order_by(heads.c.last_served.asc().nulls_first(), OutboxEvent.id)
+            .order_by(OutboxEvent.id)
             .with_for_update(skip_locked=True, of=OutboxEvent)
             .limit(limit)
         )

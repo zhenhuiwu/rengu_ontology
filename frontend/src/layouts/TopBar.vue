@@ -7,7 +7,8 @@ import { useAuthStore } from '@/stores/auth';
 import { loadMyProfile } from '@/api/profile';
 import { workspaceCatalog, type OntologyWorkspace } from '@/api/workspaces';
 import { anyReal } from '@/api/config';
-import { currentApiContext } from '@/api/http';
+import { currentApiContext, setDataPurpose } from '@/api/http';
+import { myGovernanceAccess, type Vocabulary } from '@/api/governance';
 import { adminApiOn } from '@/api/admin';
 import { PAGES } from '@/nav';
 import VersionPicker from '@/components/VersionPicker.vue';
@@ -19,6 +20,27 @@ import { applyChrome, chrome } from '@/theme';
 const app = useAppStore();
 const auth = useAuthStore();
 const signingOut = ref(false);
+const purposeOptions = ref<Vocabulary[]>([]), purposeError = ref(''), purposeConfigured = ref(false);
+const purposeRevision = ref(0);
+const policyUpdated = () => { purposeRevision.value++; };
+onMounted(() => window.addEventListener('governance-policy-updated', policyUpdated));
+onBeforeUnmount(() => window.removeEventListener('governance-policy-updated', policyUpdated));
+let purposeSeq = 0;
+watch(() => `${currentApiContext().demoAs}:${currentApiContext().ontologyId}:${app.workspaceEpoch}:${purposeRevision.value}`, async () => {
+  const seq = ++purposeSeq;
+  purposeOptions.value = []; purposeError.value = ''; purposeConfigured.value = false;
+  if (!adminApiOn() || !app.workspace || app.workspaceError) return;
+  try {
+    const access = await myGovernanceAccess();
+    if (seq !== purposeSeq) return;
+    purposeOptions.value = access.purposes; purposeConfigured.value = access.configured;
+    if (currentApiContext().dataPurpose && !access.purposes.some(p => p.code === currentApiContext().dataPurpose)) setDataPurpose(null);
+  } catch { if (seq === purposeSeq) purposeError.value = '用途授权加载失败'; }
+}, { immediate: true });
+function selectPurpose(value?: string) {
+  setDataPurpose(value || null);
+  window.location.reload();
+}
 const passwordOpen = ref(false);
 async function onUserMenu({ key }: { key: string | number }) {
   if (key === 'password') { passwordOpen.value = true; return; }
@@ -78,7 +100,7 @@ watch(() => router.currentRoute.value.name, (name) => { if (name === 'workspaces
 function onHelp({ key }: { key: string | number }) {
   if (key === 'kbd') setTimeout(() => inputRef.value?.focus(), 0);
   else if (key === 'start') message.info('快速入门：在顶部搜索框输入对象、指标或直接提问');
-  else if (key === 'feedback') message.info(adminApiOn() ? '请把问题和截图发给平台管理员' : '请把问题和截图发给平台管理员王敏');
+  else if (key === 'feedback') message.info(adminApiOn() ? '请把问题和截图发给平台管理员' : '请把问题和截图发给平台管理员');
 }
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 
@@ -125,6 +147,7 @@ function onSelect(v: string) {
     </div>
 
     <div class="tb-right">
+      <a-select v-if="purposeConfigured || purposeError" :value="currentApiContext().dataPurpose || undefined" :options="purposeOptions.map(p => ({ value: p.code, label: p.name }))" :placeholder="purposeError || '选择数据用途'" :disabled="!!purposeError" allow-clear style="width:160px" aria-label="数据使用用途" @change="selectPurpose" />
       <a-segmented
         class="tb-chrome" size="small" :value="chrome" aria-label="界面配色"
         :options="[{ label: '白色', value: 'light' }, { label: '海军蓝', value: 'navy' }]"

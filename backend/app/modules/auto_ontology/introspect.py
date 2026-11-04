@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import inspect, text, types
+from sqlalchemy import bindparam, inspect, text, types
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,10 +60,12 @@ class Table:
     pk: list[str]
     fks: list[ForeignKey] = field(default_factory=list)
     unique_sets: list[list[str]] = field(default_factory=list)
+    kind: str = "table"
 
     def to_json(self) -> dict[str, Any]:
         return {
             "name": self.name,
+            **({"kind": "view"} if self.kind == "view" else {}),
             "comment": self.comment,
             "pk": self.pk,
             "columns": [
@@ -109,12 +111,36 @@ def readable_table_stats(conn: Connection, schema: str) -> dict[str, int] | None
     }
 
 
+def mysql_catalog_columns(conn: Connection, schema: str, names: list[str]) -> dict:
+    """Visible column metadata without SHOW CREATE VIEW / extra SHOW VIEW privileges."""
+    if not names:
+        return {}
+    statement = text("""
+        SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_COMMENT
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = :schema AND TABLE_NAME IN :names
+        ORDER BY TABLE_NAME, ORDINAL_POSITION
+    """).bindparams(bindparam("names", expanding=True))
+    result = {}
+    for table, name, data_type, column_type, nullable, comment in conn.execute(
+        statement, {"schema": schema, "names": names}
+    ):
+        factory = conn.dialect.ischema_names.get(data_type.lower(), types.NullType)
+        result.setdefault((schema, table), []).append({
+            "name": name, "type": factory(), "db_type": column_type,
+            "nullable": nullable == "YES", "comment": comment or None,
+        })
+    return result
+
+
 def inspect_tables(conn: Connection, schema: str, only: list[str] | None) -> list[Table]:
     """公开的结构内省入口；固定权限元数据查询及 inspector，不接受调用方 SQL。"""
     insp = inspect(conn)
     if schema not in insp.get_schema_names():
         raise SchemaNotFound(details={"schema": schema})
     names = [n for n in insp.get_table_names(schema=schema) if n not in SYSTEM_TABLES]
+    views = set(insp.get_view_names(schema=schema)) - SYSTEM_TABLES if conn.dialect.name == "mysql" else set()
+    names = sorted(set(names) | views)
     if only:
         missing = sorted(set(only) - set(names))
         if missing:
@@ -129,24 +155,29 @@ def inspect_tables(conn: Connection, schema: str, only: list[str] | None) -> lis
         raise TooManyTables(details={"count": len(names), "max": MAX_TABLES})
     out: list[Table] = []
     for name in sorted(names):
+        is_view = name in views
+        reflected_columns = (mysql_catalog_columns(conn, schema, [name]).get((schema, name), [])
+                             if is_view else insp.get_columns(name, schema=schema))
+        if not reflected_columns:
+            raise Forbidden("源账号无法读取所选表或视图的列元数据")
         cols = [
-            Column(c["name"], str(c["type"]), column_kind(c["type"]), bool(c["nullable"]), c.get("comment"))
-            for c in insp.get_columns(name, schema=schema)
+            Column(c["name"], c.get("db_type") or str(c["type"]), column_kind(c["type"]), bool(c["nullable"]), c.get("comment"))
+            for c in reflected_columns
         ]
-        pk = list(insp.get_pk_constraint(name, schema=schema).get("constrained_columns") or [])
+        pk = [] if is_view else list(insp.get_pk_constraint(name, schema=schema).get("constrained_columns") or [])
         fks = [
             ForeignKey(list(f["constrained_columns"]), f["referred_table"], list(f["referred_columns"]))
-            for f in insp.get_foreign_keys(name, schema=schema)
+            for f in ([] if is_view else insp.get_foreign_keys(name, schema=schema))
             if f.get("referred_table") and (f.get("referred_schema") in (None, schema))
         ]
-        uniq = [list(u["column_names"]) for u in insp.get_unique_constraints(name, schema=schema)]
+        uniq = [list(u["column_names"]) for u in ([] if is_view else insp.get_unique_constraints(name, schema=schema))]
         uniq += [
             list(i["column_names"])
-            for i in insp.get_indexes(name, schema=schema)
+            for i in ([] if is_view else insp.get_indexes(name, schema=schema))
             if i.get("unique") and all(i["column_names"])
         ]
-        comment = (insp.get_table_comment(name, schema=schema) or {}).get("text")
-        out.append(Table(name, comment, cols, pk, fks, uniq))
+        comment = None if is_view else (insp.get_table_comment(name, schema=schema) or {}).get("text")
+        out.append(Table(name, comment, cols, pk, fks, uniq, kind="view" if is_view else "table"))
     return out
 
 

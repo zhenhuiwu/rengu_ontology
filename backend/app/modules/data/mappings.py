@@ -3,6 +3,7 @@
 import re
 
 from sqlalchemy import select
+from sqlalchemy.orm import raiseload
 
 from app.core.errors import AppError
 from app.db.dialects import get_adapter
@@ -16,6 +17,7 @@ async def mapped_objects(session, ds: Datasource) -> list[ObjectType]:
     return list(
         await session.scalars(
             select(ObjectType)
+            .options(raiseload(ObjectType.properties))
             .where(ObjectType.datasource_name.in_([ds.code, ds.name]))
             .order_by(ObjectType.code)
         )

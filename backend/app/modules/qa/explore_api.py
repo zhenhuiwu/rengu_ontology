@@ -211,7 +211,8 @@ class Bound:
 
     async def stmt(self, viewer: CurrentUser) -> Select:
         check_object_read(viewer)
-        stmt: Select = select(self.id_col.label("__id"), *[c.label(k) for k, c in self.cols.items()])
+        stmt: Select = select(self.id_col.label("__id"), *[self.cols[k].label(k) for k in self.out])
+        stmt = stmt.execution_options(governance_masked=True)
         stmt = stmt.select_from(self.frm)
         for k, v in (self.b.get("where") or {}).items():
             stmt = stmt.where(self.base.c[k] == v)
@@ -355,7 +356,7 @@ async def _facets(session: Any, bd: Bound, base: Select, body: ExploreIn) -> lis
     out: list[dict] = []
     for k in bd.cols:
         p = bd.props[k]
-        if not flags(p)["filterable"]:
+        if not flags(p)["filterable"] or k not in getattr(bd, "governance_facets", bd.out):
             continue
         sub = bd.where(base, body, skip=k).subquery()
         sc = sub.c[k]
@@ -384,6 +385,45 @@ def _item(bd: Bound, r: Any) -> dict:
         "title": str(_out(title)) if title is not None else str(r["__id"]),
         "values": {k: _out(r[k]) for k in bd.out},
     }
+
+
+async def _governance_access(session, viewer, bd, body=None, operation="read"):
+    from app.modules.governance.policy import enforce
+    from app.modules.static.lineage import identity
+
+    await enforce(session, viewer, [identity("object", bd.code)], operation)
+    decisions = await enforce(session, viewer, [identity("property", bd.code, k) for k in bd.out], operation)
+    for key in bd.out:
+        if bd.cols[key].compare(bd.id_col) and decisions[identity("property", bd.code, key)]["mask"] != "none":
+            raise AppError("对象主键需要明文读取授权", code="GOVERNANCE_MASK_REQUIRED", status_code=403)
+    if body is not None:
+        keys = set(body.filters)
+        if body.sort:
+            keys.add(body.sort.removeprefix("-"))
+        if body.kw:
+            keys.update(k for k in bd.out if flags(bd.props[k])["searchable"])
+        await enforce(session, viewer, [identity("property", bd.code, k) for k in keys], "filter", unmasked=True)
+    bd.governance_facets = set()
+    from app.core.errors import Forbidden
+    for key in bd.out:
+        if flags(bd.props[key])["filterable"]:
+            try:
+                await enforce(session, viewer, [identity("property", bd.code, key)], "filter", unmasked=True)
+                bd.governance_facets.add(key)
+            except Forbidden as exc:
+                if exc.code != "GOVERNANCE_DENIED":
+                    raise
+
+
+async def _safe_item(session, viewer, bd, row):
+    from app.modules.governance.policy import mask_properties
+    item = _item(bd, row)
+    original = item["values"]
+    item["values"] = await mask_properties(session, viewer, bd.code, original)
+    if bd.title in original and item["values"][bd.title] != original[bd.title]:
+        value = item["values"][bd.title]
+        item["title"] = str(value) if value is not None else "已脱敏"
+    return item
 
 
 @explore.get("/object-types", summary="使用区已发布对象类型目录")
@@ -467,6 +507,7 @@ async def explore_search(
         bd.check([body.sort.removeprefix("-")], "排序")
     _, _, viewer = await svc.effective_viewer(session, user, ctx)
     check_func(viewer, "object-search", "view")
+    await _governance_access(session, viewer, bd, body)
     empty["canExport"] = await can_export_object(session, viewer, code) and not ctx.preview_as
     base = await bd.stmt(viewer)
     stmt = bd.where(base, body)
@@ -476,13 +517,13 @@ async def explore_search(
     else:
         stmt = stmt.order_by(bd.id_col)
     async with bd.read(session) as reader:
-        total = (await reader.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+        total = (await reader.execute(select(func.count()).select_from(stmt.with_only_columns(bd.id_col).order_by(None).subquery()))).scalar_one()
         page = min(body.page, max(1, -(-total // body.size)))
         rows = (await reader.execute(stmt.offset((page - 1) * body.size).limit(body.size))).mappings().all()
         facets = await _facets(reader, bd, base, body) if body.with_facets else []
     return {
         **empty,
-        "items": [_item(bd, r) for r in rows],
+        "items": [await _safe_item(session, viewer, bd, r) for r in rows],
         "total": total,
         "page": page,
         "bound": True,
@@ -503,6 +544,7 @@ async def explore_get(code: str, id: str, session: SessionDep, user: CurrentUser
     if bd is None:
         raise NotFound("该对象类型未接入数据", details={"objectType": code, "id": id})
     _, _, viewer = await svc.effective_viewer(session, user, ctx)
+    await _governance_access(session, viewer, bd)
     stmt = (await bd.stmt(viewer)).where(bd.id_col == bd.id_value(id))
     async with bd.read(session) as reader:
         r = (await reader.execute(stmt.limit(1))).mappings().first()
@@ -510,7 +552,7 @@ async def explore_get(code: str, id: str, session: SessionDep, user: CurrentUser
         # Do not query outside the authorized predicate merely to distinguish existence.
         raise NotFound("对象不存在", details={"objectType": code, "id": id})
     return {
-        **_item(bd, r),
+        **await _safe_item(session, viewer, bd, r),
         "titleProp": bd.title,
         "bound": True,
         "boundProps": bd.out,
@@ -551,6 +593,7 @@ async def explore_export(
     check_func(viewer, "object-search", "view")
     if not await can_export_object(session, viewer, code):
         raise ExportForbidden("没有此对象类型的导出权限")
+    await _governance_access(session, viewer, bd, body, "export")
     stmt = bd.where(await bd.stmt(viewer), body)
     if body.ids is not None:
         stmt = stmt.where(bd.id_col.in_([bd.id_value(value) for value in body.ids]))
@@ -594,6 +637,7 @@ async def explore_ids(
     if bd is None:
         return []
     bd.check(body.filters, "筛选")
+    await _governance_access(session, viewer, bd, body)
     stmt = bd.where(await bd.stmt(viewer), body).order_by(bd.id_col).limit(limit + 1)
     async with bd.read(session) as reader:
         ids = [str(r["__id"]) for r in (await reader.execute(stmt)).mappings().all()]
@@ -621,6 +665,7 @@ async def explore_related(
     if source is None:
         raise NotFound("该对象类型未接入数据")
     _, _, viewer = await svc.effective_viewer(session, user, ctx)
+    await _governance_access(session, viewer, source)
     origin_stmt = (await source.stmt(viewer)).where(source.id_col == source.id_value(id))
     async with source.read(session) as reader:
         origin = (await reader.execute(origin_stmt.limit(1))).mappings().first()
@@ -678,6 +723,11 @@ async def explore_related(
         if not same_source or remote_key not in target.out:
             out.append({**group, "state": "unsupported"})
             continue
+        await _governance_access(session, viewer, target)
+        from app.modules.governance.policy import enforce
+        from app.modules.static.lineage import identity
+        await enforce(session, viewer, [identity("property", source.code, local_key),
+                                      identity("property", target.code, remote_key)], "filter", unmasked=True)
         value = origin[local_key]
         if value is None:
             out.append(group)
@@ -686,7 +736,7 @@ async def explore_related(
             target.cols[remote_key] == scalar_filter(target.cols[remote_key], value, remote_key)
         )
         async with target.read(session) as reader:
-            total = (await reader.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+            total = (await reader.execute(select(func.count()).select_from(stmt.with_only_columns(target.id_col).order_by(None).subquery()))).scalar_one()
             actual_page = min(page, max(1, -(-total // size)))
             rows = (
                 (
@@ -698,7 +748,7 @@ async def explore_related(
                 .all()
             )
         out.append(
-            {**group, "items": [_item(target, row) for row in rows], "total": total, "page": actual_page}
+            {**group, "items": [await _safe_item(session, viewer, target, row) for row in rows], "total": total, "page": actual_page}
         )
     if link and not out:
         raise NotFound("该版本中对象关系不存在")
@@ -756,6 +806,10 @@ async def scoped_summary(session, viewer, ctx, scope, question):
         raise ValidationFailed("该属性未配置可读取的数值映射")
     body = ExploreIn(**(scope.query or {}))
     binding.check(body.filters, "筛选")
+    from app.modules.governance.policy import enforce
+    from app.modules.static.lineage import identity
+    await _governance_access(session, viewer, binding, body)
+    await enforce(session, viewer, [identity("object", code)] + ([identity("property", code, prop)] if prop else []), "aggregate", unmasked=True)
     stmt = binding.where(await binding.stmt(viewer), body)
     if scope.single:
         stmt = stmt.where(binding.id_col == binding.id_value(scope.single.id))

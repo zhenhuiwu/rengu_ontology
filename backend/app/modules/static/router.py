@@ -34,6 +34,7 @@ from app.modules.static.capabilities import capabilities as capability_catalog
 from app.modules.static.cr_write import CrWriteService
 from app.modules.static.crs import ChangeRequestService
 from app.modules.static.knowledge_trial import KnowledgeResolveIn, resolve_knowledge
+from app.modules.static.lineage_router import router as lineage_router
 from app.modules.static.metric_trial import MetricTrialIn, metric_readiness, metrics_readiness, trial_metric
 from app.modules.static.metric_versions import MetricRollbackIn
 from app.modules.static.metric_versions import rollback as rollback_metric
@@ -67,6 +68,7 @@ from app.modules.versioning.repo import ReleaseRepo
 from app.modules.versioning.schemas import ReleaseOut
 
 router = APIRouter(tags=["static"])
+router.include_router(lineage_router)
 
 
 # 功能权限（api-index 权限表）：页面 key·view；

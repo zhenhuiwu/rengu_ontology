@@ -208,7 +208,7 @@ async function createBlank() {
     setQuery({ newName: undefined, source_session: undefined, page_intent: undefined, page_id: r.id, ptab: sourceSessionId && q('page_intent') === 'share' ? 'share' : 'preview' }); await loadList(); return;
   }
   const id = nextId();
-  pages.unshift({ id, name: newName.value.trim(), owner: '王敏', scope: newScope.value, sourceKind: '手动新建', source: '手动新建', cards: [], dataAsOf: PAGES_CUTOFF, lastRefresh: NOW, updatedAt: NOW,
+  pages.unshift({ id, name: newName.value.trim(), owner: 'admin', scope: newScope.value, sourceKind: '手动新建', source: '手动新建', cards: [], dataAsOf: PAGES_CUTOFF, lastRefresh: NOW, updatedAt: NOW,
     refresh: { freq: '每天', time: '08:00', onFail: '保留上次结果' }, sub: { on: false, channel: '邮件', receivers: [], when: '每次刷新后', onlyChanged: false },
     share: { mode: '仅自己', members: [], link: false, allowExport: true }, status: '正常', views: 0 });
   newOpen.value = false; newName.value = '';
@@ -253,7 +253,7 @@ async function fromTemplate(e: TplCreate) {
   const id = nextId();
   const refresh: RefreshPlan = e.refresh.startsWith('每小时') ? { freq: '每小时', time: '整点', onFail: '保留上次结果' } : e.refresh.startsWith('每周') ? { freq: '每周', weekday: '周一', time: '08:00', onFail: '保留上次结果' } : e.refresh.startsWith('手动') ? { freq: '手动', time: '--', onFail: '保留上次结果' } : { freq: '每天', time: '08:00', onFail: '保留上次结果' };
   const cards = e.tpl.cards.map((c, i) => ({ ...c, key: `${id}-C${i + 1}` }));
-  pages.unshift({ id, name: e.name, owner: '王敏', scope: e.scope, sourceKind: '模板', source: `模板「${e.tpl.name}」· ${e.caliber}`, cards, dataAsOf: PAGES_CUTOFF, lastRefresh: NOW, updatedAt: NOW,
+  pages.unshift({ id, name: e.name, owner: 'admin', scope: e.scope, sourceKind: '模板', source: `模板「${e.tpl.name}」· ${e.caliber}`, cards, dataAsOf: PAGES_CUTOFF, lastRefresh: NOW, updatedAt: NOW,
     refresh, sub: { on: false, channel: '邮件', receivers: [], when: '每次刷新后', onlyChanged: false }, share: { mode: '仅自己', members: [], link: false, allowExport: true },
     status: cards.some((c) => c.pending) ? '口径待更新' : '正常', statusNote: cards.find((c) => c.pending)?.pending, views: 0 });
   router.replace({ query: { tab: undefined, page_id: id } });

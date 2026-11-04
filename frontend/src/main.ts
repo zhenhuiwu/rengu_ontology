@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons-vue';
 import 'ant-design-vue/dist/reset.css';
 import './styles/tokens.css';
+import './styles/side-list.css';
 import App from './App.vue';
 import { router } from './router';
 import { anyReal, setupApi, setUnauthorizedHandler } from './api';

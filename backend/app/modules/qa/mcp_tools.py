@@ -36,8 +36,8 @@ from app.modules.admin.model_settings import ModelRuntime
 from app.modules.qa import chain
 from app.modules.qa.llm import LLMClient, configured_runtime, get_llm
 
-# 转发到平台机器接口时沿用的调用身份请求头
-FORWARD_HEADERS = ("authorization", "cookie", "x-ontology-id", "x-demo-as")
+# 转发到平台机器接口时沿用的调用身份请求头（Origin 用于同源浏览器内的会话调用通过 CSRF 校验）
+FORWARD_HEADERS = ("authorization", "cookie", "origin", "x-ontology-id", "x-data-purpose", "x-demo-as")
 
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -170,7 +170,9 @@ async def _forward(c: Ctx, method: str, path: str, body: Any, extra: dict[str, s
 
     headers = {k: v for k, v in c.request.headers.items() if k.lower() in FORWARD_HEADERS}
     transport = httpx.ASGITransport(app=c.request.app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://mcp.internal", timeout=60) as cli:
+    # Loopback host keeps the forwarded same-origin browser session inside the dev CSRF allowlist;
+    # API-key calls do not use Origin at all.
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1", timeout=60) as cli:
         res = await cli.request(method, path, json=body, headers={**headers, **(extra or {})})
     try:
         data = res.json()
@@ -222,14 +224,19 @@ def _idempotency_key(c: Ctx, name: str, args: dict[str, Any], rid: Any) -> str:
 async def _metric_query(c: Ctx, args: dict[str, Any]) -> Any:
     from app.modules.static.metric_trial import evaluate_metric
 
+    if set(args) - {"metric", "days", "period", "snapshot"}:
+        raise _ParamError("指标工具包含未支持的字段，不能忽略时间、分组或过滤条件")
     code = str(args.get("metric") or "").strip()
     if not code or len(code) > 64:
         raise _ParamError("metric 必填（指标编号）")
     period = str(args.get("period") or "day")
-    if period not in ("day", "week", "month"):
-        raise _ParamError("period 只能是 day / week / month")
+    if period not in ("day", "week", "month", "none"):
+        raise _ParamError("period 只能是 day / week / month / none")
+    snapshot = args.get("snapshot", False)
+    if not isinstance(snapshot, bool) or snapshot and ("days" in args or "period" in args):
+        raise _ParamError("snapshot 须为布尔值，快照不能附带 days / period")
     days = _int(args, "days", 30, 1, 93)
-    return await evaluate_metric(c.session, c.user, code, days=days, period=period)
+    return await evaluate_metric(c.session, c.user, code, days=days, period=period, snapshot=snapshot)
 
 
 class _ParamError(Exception):
@@ -301,7 +308,8 @@ TOOLS: dict[str, Tool] = {
                         "description": "指标编号（GET /meta/capabilities 的 metrics[].id，trialReady）",
                     },
                     "days": {"type": "integer", "minimum": 1, "maximum": 93, "default": 30},
-                    "period": {"type": "string", "enum": ["day", "week", "month"], "default": "day"},
+                    "period": {"type": "string", "enum": ["day", "week", "month", "none"], "default": "day"},
+                    "snapshot": {"type": "boolean", "default": False, "description": "整体快照，不限定时间；不能同时给days/period"},
                 },
                 "required": ["metric"],
                 "additionalProperties": False,

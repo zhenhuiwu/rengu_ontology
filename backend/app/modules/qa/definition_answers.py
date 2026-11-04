@@ -1,14 +1,15 @@
 """只使用当前账号可见的本体定义生成可追溯的问数回答。"""
 
 import json
+import re
 
 from sqlalchemy import select
 
 from app.common.context import ViewContext
 from app.modules.action.checker import definition
-from app.modules.static.capabilities import capabilities
-from app.modules.static.service import StaticService
+from app.modules.qa.capability_context import capabilities
 from app.modules.static.models import Metric
+from app.modules.static.service import StaticService
 
 
 async def evidence(session, user, request=None):
@@ -98,8 +99,50 @@ async def evidence(session, user, request=None):
     return result
 
 
+def select_evidence(question: str, items: dict[str, str]) -> dict[str, str]:
+    """Narrow supplemental definitions only for one unambiguous authoritative anchor."""
+    if (
+        re.search(r"(?:本体|平台|系统).{0,8}(?:能力|概况|总览|概览)", question)
+        or (
+            re.search(r"本体|平台|系统|全部|所有|整体|各类", question)
+            and re.search(r"有哪些|有什么|列举|列出|清单|目录|总览|概览", question)
+        )
+        or (
+            re.search(r"\b(?:all|every|ontology|platform|system)\b", question, re.I)
+            and re.search(r"\b(?:list|overview|capabilities|catalog|available)\b", question, re.I)
+        )
+    ):
+        return dict(items)
+    names, owners = {}, {}
+    for key, text in items.items():
+        name = re.search(r"「([^」]+)」", text)
+        if not name or ":" not in key:
+            return dict(items)
+        names[key] = name[1]
+        for term in (name[1], key.split(":", 1)[1]):
+            owners.setdefault(term.casefold(), set()).add(key)
+    hits = set()
+    for term, keys in owners.items():
+        han = re.findall(r"[\u4e00-\u9fff]", term)
+        usable = len(han) >= 2 if han else len(re.findall(r"[a-z0-9]", term)) >= 3
+        if not usable:
+            continue
+        pattern = re.escape(term) if han else rf"(?<![a-z0-9_-]){re.escape(term)}(?![a-z0-9_-])"
+        if re.search(pattern, question, re.I):
+            if len(keys) != 1:
+                return dict(items)
+            hits.update(keys)
+    if len(hits) != 1:
+        return dict(items)
+    chosen = next(iter(hits))
+    name = names[chosen]
+    return {key: text for key, text in items.items() if key == chosen or name in text}
+
+
 def prompt_lines(items):
-    return [json.dumps({"id": key, "内容": value}, ensure_ascii=False) for key, value in items.items()]
+    return [
+        json.dumps([key, value], ensure_ascii=False, separators=(",", ":")) for key, value in items.items()
+    ]
 
 
 def snapshot(ids, items):

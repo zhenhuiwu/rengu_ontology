@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.common.auth import CurrentUserDep, resolve_user
+from app.common.pagination import MAX_PAGE_SIZE, PageParams
 from app.core import clock
 from app.db.session import SessionDep
 from app.modules.versioning.repo import ReleaseRepo
@@ -18,10 +19,25 @@ router = APIRouter(prefix="/releases", tags=["本体版本"])
 ServiceDep = Annotated[VersioningService, Depends(get_version_service)]
 
 
-@router.get("", response_model=ReleaseListOut, summary="版本列表（不分页，新→旧，第一条是当前版本）")
-async def list_releases(session: SessionDep, _: CurrentUserDep) -> ReleaseListOut:
-    """PDE api-index §1.11：RELEASES 全量 + current；登录即可调用，不分页。"""
-    rows = await ReleaseRepo(session).formal()
+@router.get("", response_model=ReleaseListOut, response_model_exclude_unset=True, summary="正式发布列表")
+async def list_releases(
+    session: SessionDep,
+    _: CurrentUserDep,
+    page: int | None = None,
+    size: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+    kw: Annotated[str | None, Query(max_length=200, pattern=r"^[^\x00]*$")] = None,
+) -> ReleaseListOut:
+    """Explicit paging/search reads formal releases only; omitted parameters retain the full picker catalog."""
+    repo = ReleaseRepo(session)
+    if page is not None or size is not None or kw is not None:
+        params = PageParams(page=page if page is not None else 1, size=size if size is not None else 20)
+        rows, total = await repo.formal_page(params, kw or "")
+        actual = params.clamp(total)
+        return ReleaseListOut(
+            items=[ReleaseOut.model_validate(r) for r in rows], current=await repo.latest_formal_ver(),
+            total=total, page=actual.page, size=actual.size,
+        )
+    rows = await repo.formal()
     items = [ReleaseOut.model_validate(r) for r in rows]
     return ReleaseListOut(
         items=items,

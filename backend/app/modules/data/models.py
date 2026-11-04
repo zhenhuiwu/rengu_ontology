@@ -12,6 +12,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -90,6 +91,10 @@ class Datasource(CodeMixin, MutableTableMixin, Base):
     sync_next_run: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="下次运行")
     mirror_schedule_actor: Mapped[str | None] = mapped_column(String(64), nullable=True)
     table_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="库表数")
+    internal: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+        comment="内部同步镜像，不出现在用户数据连接列表",
+    )
     created_on: Mapped[date] = mapped_column(Date, nullable=False, comment="创建日期（接口 createdAt）")
     note: Mapped[str | None] = mapped_column(Text, comment="详情顶部说明")
     ref_only: Mapped[dict | None] = mapped_column(JsonType, comment="只作参考的对象 {objects, source}")
@@ -168,6 +173,7 @@ class ExternalReadBinding(IdMixin, MutableTableMixin, Base):
     schema_name: Mapped[str] = mapped_column(String(128), nullable=False)
     table_name: Mapped[str] = mapped_column(String(128), nullable=False)
     read_columns: Mapped[list] = mapped_column(JsonType, nullable=False)
+    declared_unique_key: Mapped[str | None] = mapped_column(String(128), comment="显式声明并逐次验证的视图唯一键")
 
 
 class ExternalMirrorState(IdMixin, MutableTableMixin, Base):
@@ -239,3 +245,17 @@ class ExternalCdcSubscription(IdMixin, Base):
     error: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(64))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ExternalCdcChange(IdMixin, Base):
+    """Committed source row images; idempotent at exact transaction/row position."""
+    __tablename__ = "external_cdc_change"
+    __table_args__ = (UniqueConstraint("object_code", "event_key"),
+                      Index("ix_external_cdc_change_ontology_object", "ontology_id", "object_code", "id"))
+    object_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_position: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    operation: Mapped[str] = mapped_column(String(8), nullable=False)
+    before_image: Mapped[dict | None] = mapped_column(JsonType)
+    after_image: Mapped[dict | None] = mapped_column(JsonType)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

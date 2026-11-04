@@ -100,14 +100,14 @@ class MetricExpression(Expression):
             return ast.Attribute(ast.Name("指标", ast.Load()), column, ast.Load())
         return super().visit_Call(node)
 
-    def run(self, row, at):
+    async def run(self, row, at):
         values = dict(row)
         for column, by_code, _ in self.bindings.values():
             value = by_code.get(row.get("__identity", row.get("code")))
             if isinstance(value, str) or value is None:
                 raise Unavailable(value or "该对象缺少真实指标时间桶")
             values[column] = value
-        return super().run(values, at)
+        return await super().run(values, at)
 
 
 async def bind_metrics(session, user, tree, obj, gov, at, timezone, *, object_identity=None, source_row=None):

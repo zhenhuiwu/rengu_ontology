@@ -23,6 +23,7 @@ from app.modules.dynamic.catalog import DatabaseRefCatalog, get_catalog, get_lis
 from app.modules.dynamic.models import ActionRun
 from app.modules.dynamic.object_behavior import automation_hits, behavior_stats
 from app.modules.dynamic.ports import PortsDep
+from app.modules.dynamic.lifecycle_edit import LifecycleSaveIn, save_lifecycle
 from app.modules.dynamic.rules_schemas import (
     LifecycleDraftIn,
     PublishedRuleMetadata,
@@ -471,9 +472,21 @@ async def get_lifecycle(
     release: Annotated[OntologyRelease | None, Depends(_release)],
     view: str | None = None,
     cr: str | None = None,
-) -> dict[str, Any]:
+    optional: bool = False,
+) -> dict[str, Any] | None:
     """L1：状态、迁移、版本；?ver= 时为该版发布时生效的状态机；view=draft 带草稿改动。"""
-    return await svc.detail(object_id, view=view, cr=cr, release=release)
+    try:
+        return await svc.detail(object_id, view=view, cr=cr, release=release)
+    except NotFound:
+        if optional:
+            return None
+        raise
+
+
+@router.put("/object-types/{object_id}/lifecycle", dependencies=[*OT_MANAGE, Depends(require_func("releases", "manage"))])
+async def put_lifecycle(session: SessionDep, user: CurrentUserDep, object_id: str, body: LifecycleSaveIn) -> dict[str, Any]:
+    """Create or edit a lifecycle immediately; preserve historical versions."""
+    return await save_lifecycle(session, user, object_id, body)
 
 
 @router.get("/object-types/{object_id}/lifecycle/changes", dependencies=OT_READ, response_model=DictPage)

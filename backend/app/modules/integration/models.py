@@ -71,6 +71,25 @@ class ExtSystem(CodeMixin, MutableTableMixin, Base):
     usage: Mapped[dict | None] = mapped_column(JsonType, comment="用途说明 {text, ops, actor?}（mock 原样）")
 
 
+class SourceWriteBinding(IdMixin, MutableTableMixin, Base):
+    """Opt-in source write credential and exact action/column grants, separate from read credentials."""
+    __tablename__ = "source_write_binding"
+    __table_args__ = (UniqueConstraint("sys_id"),)
+    sys_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("ext_system.id"), nullable=False)
+    datasource_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_signature: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    table_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    key_column: Mapped[str] = mapped_column(String(128), nullable=False)
+    receipt_table: Mapped[str] = mapped_column(String(128), nullable=False)
+    username: Mapped[str] = mapped_column(String(128), nullable=False)
+    password_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    write_columns: Mapped[list] = mapped_column(JsonType, nullable=False)
+    actions: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
 class CallResult(LabelEnum):
     """外部调用结果（action-event-api §3.5：succeeded→成功，failed→失败，unknown→结果未知）。"""
 

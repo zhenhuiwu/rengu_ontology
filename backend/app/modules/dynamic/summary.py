@@ -149,8 +149,9 @@ class ObjectDynamicSummary:
             ).all()
         )
         alert_ids = {h.alert_id for h in hits if h.alert_id}
+        from app.modules.governance.dynamic_guard import read_scope
         alerts = (
-            {a.id: a for a in await self.session.scalars(select(Alert).where(Alert.id.in_(alert_ids), Alert.deleted_at.is_(None)))}
+            {a.id: a for a in await self.session.scalars(await read_scope(self.session, self.user, select(Alert).where(Alert.id.in_(alert_ids), Alert.deleted_at.is_(None)), Alert))}
             if alert_ids
             else {}
         )
