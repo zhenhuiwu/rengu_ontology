@@ -1,1 +1,11 @@
 /exports/database/
+
+# Local investigation artifacts; keep documentation images under docs/.
+/_fetch/
+/.ruff_cache/
+/backend/testlogs/
+/backend/tests/e2e/results/
+/frontend/shots/
+/测试/
+__pycache__/
+*.py[cod]
